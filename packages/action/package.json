@@ -1,0 +1,28 @@
+{
+  "name": "@crabd/action",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "crabd": "./dist/cli.mjs"
+  },
+  "scripts": {
+    "build": "flue build && tsdown",
+    "flue:build": "flue build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@crabd/config": "workspace:*",
+    "@crabd/core": "workspace:*",
+    "@flue/cli": "1.0.0-beta.9",
+    "@flue/runtime": "1.0.0-beta.9",
+    "hono": "^4.8.3",
+    "valibot": "^1.1.0"
+  },
+  "devDependencies": {
+    "tsdown": "^0.22.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.6"
+  }
+}

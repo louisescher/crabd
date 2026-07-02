@@ -1,0 +1,29 @@
+{
+  "name": "@crabd/config",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "jiti": "^2.4.2",
+    "js-yaml": "^4.1.0",
+    "valibot": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "tsdown": "^0.22.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.6"
+  }
+}

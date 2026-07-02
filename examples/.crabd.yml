@@ -1,0 +1,32 @@
+# Example crab'd repository config. Drop this at your repo root as `.crabd.yml`.
+# Every field is optional, omit anything to take the built-in default.
+
+model: anthropic/claude-sonnet-4-6
+trigger_phrase: "@crabd"
+thinking_level: medium
+
+providers:
+  allowlist: [anthropic, openai]
+
+permissions:
+  allowed_associations: [OWNER, MEMBER, COLLABORATOR]
+
+prompt:
+  instructions: |
+    - Match the existing code style and conventions.
+    - Prefer small, focused changes with clear commit messages.
+
+limits:
+  max_turns: 40
+
+modes:
+  mention:
+    enabled: true
+  review:
+    enabled: true
+    model: openai/gpt-5.5
+    instructions: |
+      - Flag missing tests for changed behavior.
+      - Call out risky data migrations explicitly.
+  implement:
+    enabled: true

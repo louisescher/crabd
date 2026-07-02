@@ -1,0 +1,29 @@
+# crab'd for Forgejo Actions.
+# Copy to `.forgejo/workflows/crabd.yml` in your repo.
+#
+# Identity: Forgejo has no GitHub App equivalent, so crab'd acts as whatever bot
+# account owns CRABD_FORGEJO_TOKEN. Create a dedicated bot user, give it repo access,
+# and store its token as the CRABD_FORGEJO_TOKEN secret — its name/avatar become crab'd.
+name: crab'd
+on:
+  issue_comment:
+    types: [created]
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+  issues:
+    types: [assigned, labeled]
+
+jobs:
+  crabd:
+    runs-on: docker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: https://github.com/louisescher/crabd@v1
+        with:
+          forge: forgejo
+          model: anthropic/claude-sonnet-4-6
+          providers: anthropic
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CRABD_FORGEJO_API_URL: ${{ env.GITHUB_SERVER_URL }}/api/v1
+          CRABD_FORGEJO_TOKEN: ${{ secrets.CRABD_FORGEJO_TOKEN }}

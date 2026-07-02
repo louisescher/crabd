@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Create the crab'd GitHub App</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1rem; }
+      button { background: #f2660d; color: #fff; border: 0; border-radius: 0.5rem; padding: 0.75rem 1.25rem; font-size: 1rem; cursor: pointer; }
+      code { background: #f3f3f3; padding: 0.1rem 0.3rem; border-radius: 0.25rem; }
+      label { display: block; margin: 1rem 0 0.25rem; font-weight: 600; }
+      input { width: 100%; padding: 0.5rem; font-size: 1rem; box-sizing: border-box; }
+    </style>
+  </head>
+  <body>
+    <h1>🦀 Create the crab'd GitHub App</h1>
+    <p>
+      This pre-fills GitHub's App-creation form with crab'd's name, permissions, and events. You own the
+      resulting App and its private key — nothing is sent anywhere but GitHub.
+    </p>
+    <label for="org">Organization (leave blank for your personal account)</label>
+    <input id="org" placeholder="my-org" />
+    <p>
+      <button id="create">Create the crab'd App on GitHub →</button>
+    </p>
+    <p>
+      After creating it, generate a private key on the App's settings page, then store
+      <code>CRABD_APP_ID</code> and <code>CRABD_APP_PRIVATE_KEY</code> as repository or org secrets.
+    </p>
+
+    <form id="form" method="post" style="display: none">
+      <input type="hidden" name="manifest" id="manifest" />
+    </form>
+
+    <script>
+      // Keep in sync with app/manifest.json.
+      const manifest = {
+        name: "crab'd",
+        url: 'https://github.com/louisescher/crabd',
+        description: "crab'd — answers @-mentions, reviews pull requests, and implements issues.",
+        public: true,
+        default_events: ['issue_comment', 'issues', 'pull_request'],
+        default_permissions: {
+          contents: 'write',
+          issues: 'write',
+          pull_requests: 'write',
+          metadata: 'read',
+        },
+        hook_attributes: { active: false },
+      };
+
+      document.getElementById('create').addEventListener('click', () => {
+        const org = document.getElementById('org').value.trim();
+        const form = document.getElementById('form');
+        form.action = org
+          ? `https://github.com/organizations/${encodeURIComponent(org)}/settings/apps/new`
+          : 'https://github.com/settings/apps/new';
+        document.getElementById('manifest').value = JSON.stringify(manifest);
+        form.submit();
+      });
+    </script>
+  </body>
+</html>

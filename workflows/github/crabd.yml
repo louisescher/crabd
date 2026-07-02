@@ -1,0 +1,35 @@
+# crab'd for GitHub Actions.
+# Copy to `.github/workflows/crabd.yml` in your repo.
+#
+# Identity: by default crab'd authenticates as the canonical crab'd[bot] via the
+# token broker. That needs `id-token: write` (for OIDC) and the crab'd GitHub App
+# installed on the repo — no secrets to manage for identity.
+#
+# To run your OWN branded App instead, drop `id-token: write`, remove broker-url,
+# and pass `app-id` / `app-private-key` (see app/README.md).
+name: crab'd
+on:
+  issue_comment:
+    types: [created]
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+  issues:
+    types: [assigned, labeled]
+
+jobs:
+  crabd:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: louisescher/crabd@v1
+        with:
+          model: anthropic/claude-sonnet-4-6
+          providers: anthropic
+          # broker-url: https://crabd-broker.example.com  # set if self-hosting the broker
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

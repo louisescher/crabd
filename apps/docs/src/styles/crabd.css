@@ -1,0 +1,32 @@
+:root {
+  --crabd-hue: 48;
+  --sl-hue-accent: var(--crabd-hue) !important;
+}
+
+/* Dark theme (Starlight default). */
+:root,
+:root[data-theme='dark'] {
+  --sl-color-accent-low: oklch(25% 0.05 var(--crabd-hue)) !important;
+  --sl-color-accent: oklch(64% 0.19 var(--crabd-hue)) !important;
+  --sl-color-accent-high: oklch(86% 0.1 var(--crabd-hue)) !important;
+}
+
+/* Light theme. */
+:root[data-theme='light'] {
+  --sl-color-accent-low: oklch(95% 0.03 var(--crabd-hue)) !important;
+  --sl-color-accent: oklch(58% 0.19 var(--crabd-hue)) !important;
+  --sl-color-accent-high: oklch(35% 0.1 var(--crabd-hue)) !important;
+}
+
+/*
+ * rapide styles the primary hero button with the hard-coded green palette
+ * (`--sl-color-green-*`), not the accent — so remap it to the crab-orange accent.
+ */
+.sl-link-button.primary {
+  background-color: var(--sl-color-accent-low) !important;
+  border-color: var(--sl-color-accent) !important;
+  color: var(--sl-color-accent-high) !important;
+}
+.sl-link-button.primary:hover {
+  border-color: var(--sl-color-accent-high) !important;
+}

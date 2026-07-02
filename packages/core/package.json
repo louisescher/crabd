@@ -1,0 +1,30 @@
+{
+  "name": "@crabd/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@crabd/config": "workspace:*",
+    "@octokit/auth-app": "^7.1.5",
+    "@octokit/rest": "^21.1.1",
+    "@octokit/webhooks-types": "^7.6.1",
+    "valibot": "^1.1.0"
+  },
+  "devDependencies": {
+    "tsdown": "^0.22.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.6"
+  }
+}

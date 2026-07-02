@@ -1,0 +1,43 @@
+---
+title: crab'd
+description: A forge-agnostic, multi-provider coding agent for GitHub and Forgejo CI.
+template: splash
+hero:
+  tagline: The coding agent that answers @-mentions, reviews pull requests, and implements whole issues — on the model you choose, on the forge you use.
+  actions:
+    - text: Get started
+      link: /getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/louisescher/crabd
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Why crab'd?
+
+crab'd gives you the `@claude`-style workflow — mention it on an issue, let it review your
+PRs, hand it a whole issue to implement — but without being locked to one model vendor or one
+forge. It runs as a step in your CI, drives the [Flue](https://github.com/withastro/flue) agent
+harness underneath, and posts its results back through a single forge-agnostic layer.
+
+<CardGrid stagger>
+  <Card title="Truly multi-provider" icon="seti:config">
+    Anthropic, OpenAI, OpenRouter, or a local model via Ollama. Change one line — `model:
+    openai/gpt-5.5` — and nothing else moves.
+  </Card>
+  <Card title="GitHub and Forgejo" icon="github">
+    One action, two forges. crab'd normalizes events and API calls behind a single adapter, so
+    the same config works on both.
+  </Card>
+  <Card title="Configurable, governable" icon="setting">
+    A drop-in `.crabd.yml` for every dial, an optional `crabd.config.ts` for schemas and custom
+    tools, and org-level config that can lock keys.
+  </Card>
+  <Card title="Guardrail-friendly" icon="approve-check">
+    Restrict who can trigger it, and allowlist exactly which providers your repo code may reach.
+  </Card>
+</CardGrid>
