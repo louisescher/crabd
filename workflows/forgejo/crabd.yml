@@ -18,7 +18,7 @@ jobs:
     runs-on: docker
     steps:
       - uses: actions/checkout@v4
-      - uses: https://github.com/louisescher/crabd@v1
+      - uses: https://github.com/louisescher/crabd@v0
         with:
           forge: forgejo
           model: anthropic/claude-sonnet-4-6

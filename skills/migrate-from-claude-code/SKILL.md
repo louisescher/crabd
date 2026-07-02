@@ -29,7 +29,7 @@ instructions.
 
 ## 3. Write the crab'd workflow
 
-Replace the action step with `louisescher/crabd@v1`. Prefer OIDC identity (`permissions: id-token:
+Replace the action step with `louisescher/crabd@v0`. Prefer OIDC identity (`permissions: id-token:
 write`) for the canonical bot, or App credentials. Keep the same event triggers, but note review fires
 on `opened/reopened/ready_for_review` (not every push) — re-review via `/crabd review`.
 

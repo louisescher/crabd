@@ -26,3 +26,8 @@ docker buildx build --push \
 git tag "${TAG}"
 git push origin "${TAG}"
 gh release create "${TAG}" --title "${TAG}" --generate-notes || true
+
+# Maintain a moving major git tag (e.g. v0) so `uses: louisescher/crabd@v0` — and the
+# action.yml it resolves — always point at the latest release of that major line.
+git tag -f "${MAJOR}"
+git push -f origin "${MAJOR}"

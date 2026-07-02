@@ -36,7 +36,7 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
-      - uses: louisescher/crabd@v1
+      - uses: louisescher/crabd@v0
         with:
           model: anthropic/claude-sonnet-4-6
           providers: anthropic

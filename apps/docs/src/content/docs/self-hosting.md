@@ -31,7 +31,7 @@ permissions:
   id-token: write
 steps:
   - uses: actions/checkout@v4
-  - uses: louisescher/crabd@v1
+  - uses: louisescher/crabd@v0
     with:
       model: anthropic/claude-sonnet-4-6
 ```
@@ -49,7 +49,7 @@ CRABD_APP_ID=... CRABD_APP_PRIVATE_KEY=... CRABD_BROKER_AUDIENCE=crabd-broker cr
 ```
 
 ```yaml title="workflow"
-- uses: louisescher/crabd@v1
+- uses: louisescher/crabd@v0
   with:
     broker-url: https://your-broker.example.com
 ```

@@ -44,7 +44,7 @@ Put it behind HTTPS and note the public URL. Health check: `GET /health` → `{ 
 If not baking the URL into `DEFAULT_BROKER_URL`, set it per workflow:
 
 ```yaml
-- uses: louisescher/crabd@v1
+- uses: louisescher/crabd@v0
   with:
     broker-url: https://your-broker.example.com
 ```

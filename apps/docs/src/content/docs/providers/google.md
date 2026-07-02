@@ -21,7 +21,7 @@ providers:
 ```
 
 ```yaml title="workflow"
-- uses: louisescher/crabd@v1
+- uses: louisescher/crabd@v0
   with:
     model: google/gemini-2.5-pro
   env:
@@ -47,7 +47,7 @@ providers:
 - uses: google-github-actions/auth@v2
   with:
     credentials_json: ${{ secrets.GCP_SA_KEY }}
-- uses: louisescher/crabd@v1
+- uses: louisescher/crabd@v0
   with:
     model: google-vertex/gemini-2.5-pro
   env:
