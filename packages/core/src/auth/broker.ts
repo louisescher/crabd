@@ -1,7 +1,7 @@
 import type { AuthProvider } from './types.ts';
 
 /** The canonical, self-hosted crab'd token broker. Override with `CRABD_BROKER_URL`. */
-export const DEFAULT_BROKER_URL = 'https://crabd-broker.example.com';
+export const DEFAULT_BROKER_URL = 'https://broker.crabd.lou.gg';
 
 /** Default OIDC audience the broker expects. Must match the broker's `CRABD_BROKER_AUDIENCE`. */
 export const DEFAULT_BROKER_AUDIENCE = 'crabd-broker';
