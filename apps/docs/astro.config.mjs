@@ -4,9 +4,12 @@ import starlight from '@astrojs/starlight';
 import rapide from 'starlight-theme-rapide';
 import llmsTxt from 'starlight-llms-txt';
 
+import node from '@astrojs/node';
+
 // https://astro.build/config
 export default defineConfig({
   site: 'https://crabd.lou.gg',
+
   integrations: [
     starlight({
       title: "crab'd",
@@ -50,4 +53,8 @@ export default defineConfig({
       ],
     }),
   ],
+
+  adapter: node({
+    mode: 'standalone',
+  }),
 });
