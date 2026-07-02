@@ -17,10 +17,16 @@ export interface FinalizeContext<T = unknown> {
 }
 
 export interface FinalizeResult {
-  /** Text to render into the tracking comment. */
+  /** Full result text — used for the CI output, and the tracking comment by default. */
   summary: string;
   /** URL of a PR opened/updated by the mode, if any. */
   prUrl?: string;
+  /**
+   * Overrides the tracking-comment text when the mode already posted its detailed
+   * output elsewhere (e.g. review mode posts a PR review), so the tracking comment
+   * doesn't repeat it. Falls back to `summary` when unset.
+   */
+  trackingComment?: string;
 }
 
 /**

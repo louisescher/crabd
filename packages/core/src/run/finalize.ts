@@ -32,7 +32,8 @@ export async function finalizeRun(input: FinalizeInput): Promise<FinalizeResult>
     const result = await mode.finalize({ adapter, config, event, context, trigger, data, cwd });
     await adapter.updateTrackingComment(
       plan.tracking,
-      renderResult({ mode: plan.mode, summary: result.summary, prUrl: result.prUrl }),
+      // Use the mode's short tracking text when it posted its detail elsewhere (e.g. a PR review).
+      renderResult({ mode: plan.mode, summary: result.trackingComment ?? result.summary, prUrl: result.prUrl }),
     );
     return result;
   } catch (error) {

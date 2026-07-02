@@ -48,6 +48,12 @@ export const reviewMode: ModeDefinition<ReviewOutput> = {
 
     const count = ctx.data.findings.length;
     const suffix = count === 0 ? '' : ` (${count} inline finding${count === 1 ? '' : 's'})`;
-    return { summary: `${ctx.data.summary}\n\n**${VERDICT_LABEL[ctx.data.verdict]}.**${suffix}` };
+    const verdictLine = `**${VERDICT_LABEL[ctx.data.verdict]}.**${suffix}`;
+    return {
+      summary: `${ctx.data.summary}\n\n${verdictLine}`,
+      // The full summary is in the posted review; keep the tracking comment short so it
+      // isn't duplicated. See finalizeRun.
+      trackingComment: `🦀 Reviewed this pull request — ${verdictLine}`,
+    };
   },
 };

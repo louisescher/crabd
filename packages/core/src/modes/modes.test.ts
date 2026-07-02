@@ -88,6 +88,12 @@ describe('review mode finalize', () => {
     // ...but the human-facing summary uses a plain-language verdict.
     expect(result.summary).toMatch(/Please address the findings before merging\./);
     expect(result.summary).toMatch(/\(1 inline finding\)/);
+    // The tracking comment must NOT repeat the full review body (avoids the duplicate
+    // comment): it carries only a short verdict pointer.
+    expect(result.trackingComment).toBeDefined();
+    expect(result.trackingComment).not.toContain('Looks mostly good.');
+    expect(result.trackingComment).toMatch(/Reviewed this pull request/);
+    expect(result.trackingComment).toMatch(/Please address the findings before merging\./);
   });
 
   it('comment_only forces a COMMENT review while keeping the verdict in the summary', async () => {
