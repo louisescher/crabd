@@ -1,6 +1,23 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createBroker } from './index.ts';
+import { createBroker, normalizePrivateKey } from './index.ts';
 import { extractClaims } from './verify.ts';
+
+describe('normalizePrivateKey', () => {
+  const pem = '-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----';
+
+  it('passes a raw PEM through unchanged', () => {
+    expect(normalizePrivateKey(pem)).toBe(pem);
+  });
+
+  it('decodes a base64-encoded PEM', () => {
+    const base64 = Buffer.from(pem).toString('base64');
+    expect(normalizePrivateKey(base64)).toBe(pem);
+  });
+
+  it('trims surrounding whitespace', () => {
+    expect(normalizePrivateKey(`  ${pem}\n`)).toBe(pem);
+  });
+});
 
 describe('extractClaims', () => {
   it('splits the repository claim into owner and repo', () => {

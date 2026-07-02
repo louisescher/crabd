@@ -5,7 +5,7 @@ export { ForgejoForge, type ForgejoForgeOptions } from './forge/forgejo.ts';
 
 // Auth
 export { StaticTokenAuth, type AuthProvider } from './auth/types.ts';
-export { GitHubAppAuth, type GitHubAppAuthOptions } from './auth/github-app.ts';
+export { GitHubAppAuth, normalizePrivateKey, type GitHubAppAuthOptions } from './auth/github-app.ts';
 export {
   BrokerAuth,
   DEFAULT_BROKER_AUDIENCE,

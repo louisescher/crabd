@@ -5,58 +5,74 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Create the crab'd GitHub App</title>
     <style>
-      body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1rem; }
+      body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 3rem auto; padding: 0 1rem; line-height: 1.5; }
+      h1 { margin-bottom: 0.25rem; }
       button { background: #f2660d; color: #fff; border: 0; border-radius: 0.5rem; padding: 0.75rem 1.25rem; font-size: 1rem; cursor: pointer; }
-      code { background: #f3f3f3; padding: 0.1rem 0.3rem; border-radius: 0.25rem; }
-      label { display: block; margin: 1rem 0 0.25rem; font-weight: 600; }
+      button:hover { background: #d9550a; }
+      code { background: #f3f3f3; padding: 0.1rem 0.35rem; border-radius: 0.25rem; }
+      label { display: block; margin: 1.25rem 0 0.25rem; font-weight: 600; }
       input { width: 100%; padding: 0.5rem; font-size: 1rem; box-sizing: border-box; }
+      ol { padding-left: 1.25rem; }
+      li { margin: 0.4rem 0; }
+      .muted { color: #666; font-size: 0.9rem; }
     </style>
   </head>
   <body>
     <h1>🦀 Create the crab'd GitHub App</h1>
-    <p>
-      This pre-fills GitHub's App-creation form with crab'd's name, permissions, and events. You own the
-      resulting App and its private key — nothing is sent anywhere but GitHub.
+    <p class="muted">
+      This opens GitHub's <em>New GitHub App</em> form, pre-filled with crab'd's permissions and
+      events (webhook disabled). Nothing is sent anywhere but GitHub — you own the App and its key.
     </p>
+
+    <label for="name">App name (must be unique across all of GitHub)</label>
+    <input id="name" value="crabd" />
+
     <label for="org">Organization (leave blank for your personal account)</label>
     <input id="org" placeholder="my-org" />
-    <p>
-      <button id="create">Create the crab'd App on GitHub →</button>
-    </p>
-    <p>
-      After creating it, generate a private key on the App's settings page, then store
-      <code>CRABD_APP_ID</code> and <code>CRABD_APP_PRIVATE_KEY</code> as repository or org secrets.
+
+    <p style="margin-top: 1.5rem">
+      <button id="create">Open the pre-filled form on GitHub →</button>
     </p>
 
-    <form id="form" method="post" style="display: none">
-      <input type="hidden" name="manifest" id="manifest" />
-    </form>
+    <h2>Then, on GitHub</h2>
+    <ol>
+      <li>Review the form and click <strong>Create GitHub App</strong>. If the name is taken, pick a
+        unique one (e.g. <code>crabd-yourname</code>).</li>
+      <li>On the App's page, note the <strong>App ID</strong> and click
+        <strong>Generate a private key</strong> (downloads a <code>.pem</code>).</li>
+      <li>Open <strong>Install App</strong> and install it on the repos crab'd should act on.</li>
+      <li>Store <code>CRABD_APP_ID</code> and <code>CRABD_APP_PRIVATE_KEY</code> as repo/org secrets.</li>
+    </ol>
 
     <script>
-      // Keep in sync with app/manifest.json.
-      const manifest = {
-        name: "crab'd",
-        url: 'https://github.com/louisescher/crabd',
-        description: "crab'd — answers @-mentions, reviews pull requests, and implements issues.",
-        public: true,
-        default_events: ['issue_comment', 'issues', 'pull_request'],
-        default_permissions: {
+      document.getElementById('create').addEventListener('click', () => {
+        const name = document.getElementById('name').value.trim() || 'crabd';
+        const org = document.getElementById('org').value.trim();
+
+        // Pre-fill the standard "New GitHub App" form via query parameters.
+        const params = new URLSearchParams({
+          name,
+          description: "crab'd — answers @-mentions, reviews pull requests, and implements issues.",
+          url: 'https://github.com/louisescher/crabd',
+          public: 'true',
+          webhook_active: 'false', // no webhook: crab'd runs in CI, not via webhooks
+          // Permissions crab'd needs:
           contents: 'write',
           issues: 'write',
           pull_requests: 'write',
           metadata: 'read',
-        },
-        hook_attributes: { active: false },
-      };
+        });
 
-      document.getElementById('create').addEventListener('click', () => {
-        const org = document.getElementById('org').value.trim();
-        const form = document.getElementById('form');
-        form.action = org
+        // Events use repeated `events[]` keys, which URLSearchParams can't express directly.
+        const events = ['issue_comment', 'issues', 'pull_request']
+          .map((e) => `events[]=${encodeURIComponent(e)}`)
+          .join('&');
+
+        const base = org
           ? `https://github.com/organizations/${encodeURIComponent(org)}/settings/apps/new`
           : 'https://github.com/settings/apps/new';
-        document.getElementById('manifest').value = JSON.stringify(manifest);
-        form.submit();
+
+        window.location.href = `${base}?${params.toString()}&${events}`;
       });
     </script>
   </body>

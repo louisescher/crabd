@@ -19,7 +19,9 @@ workflows can use the canonical `crab'd[bot]` with only `permissions: id-token: 
 
 The broker reads:
 
-- `CRABD_APP_ID`, `CRABD_APP_PRIVATE_KEY` — the App credentials (server secrets).
+- `CRABD_APP_ID`, `CRABD_APP_PRIVATE_KEY` — the App credentials (server secrets). The key may be a
+  raw PEM or a **base64-encoded** PEM (easier to store as a single-line env var:
+  `base64 -w0 crabd-app.pem`).
 - `CRABD_BROKER_AUDIENCE` — OIDC audience (default `crabd-broker`); must match what the action sends.
 - `PORT` — Node listen port (default `8787`).
 

@@ -14,12 +14,22 @@ There are two ways it's used:
 
 ## Create the App
 
-1. Open [`register.html`](./register.html) (or paste [`manifest.json`](./manifest.json) into GitHub's
-   *New GitHub App → from manifest* flow). Optionally enter your org.
-2. Create the App. GitHub uses crab'd's name, permissions (`contents`, `issues`, `pull_requests`
-   write; `metadata` read), and events (`issue_comment`, `issues`, `pull_request`).
-3. Generate a private key and note the App ID.
-4. **Install** the App on the repos/org crab'd should act on.
+Open [`register.html`](./register.html) in a browser — it opens GitHub's *New GitHub App* form
+**pre-filled** with crab'd's permissions and events (webhook disabled). Enter a unique App name and
+(optionally) your org, then:
+
+1. Click **Create GitHub App**. Names are globally unique on GitHub, so if `crabd` is taken, pick
+   another (e.g. `crabd-yourname`).
+2. On the App's page, note the **App ID** and click **Generate a private key** (downloads a `.pem`).
+3. Open **Install App** and install it on the repos/org crab'd should act on.
+
+Permissions requested: `contents`, `issues`, `pull_requests` (write) and `metadata` (read). Events:
+`issue_comment`, `issues`, `pull_request`.
+
+> **Note:** `register.html` uses GitHub's **query-parameter pre-fill**, which needs no server. The
+> [`manifest.json`](./manifest.json) here documents the same App and can be used with GitHub's
+> *App Manifest* flow instead — but that flow requires a server to exchange the returned `code` for
+> the credentials, so it's only for automated/advanced setups, not the manual path above.
 
 - For the **canonical** setup, wire the App ID + key into the broker (`CRABD_APP_ID`,
   `CRABD_APP_PRIVATE_KEY`) — not into consumer repos.

@@ -15,6 +15,7 @@ export default defineConfig({
       title: "crab'd",
       description:
         "A forge-agnostic, multi-provider agent for @-mentions, PR reviews, and issue implementation on GitHub and Forgejo.",
+      favicon: '/favicon.png',
       plugins: [
         rapide(),
         llmsTxt({

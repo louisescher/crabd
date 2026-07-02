@@ -16,7 +16,7 @@ variables for you. Set the rest via the workflow's `env:` (secrets for anything 
 | Variable | Description |
 | --- | --- |
 | `CRABD_APP_ID` | GitHub App ID. With `CRABD_APP_PRIVATE_KEY`, authenticates as that App (self-hosted identity). Overrides the broker. |
-| `CRABD_APP_PRIVATE_KEY` | GitHub App private key (full PEM). |
+| `CRABD_APP_PRIVATE_KEY` | GitHub App private key. A raw PEM **or** a base64-encoded PEM (easier as an env var). |
 | `CRABD_APP_INSTALLATION_ID` | Optional installation ID. Auto-resolved from the repo when omitted. |
 | `CRABD_BROKER_URL` | Token-broker URL for the canonical `crab'd[bot]` identity. Defaults to the built-in `DEFAULT_BROKER_URL`. |
 | `CRABD_BROKER_AUDIENCE` | OIDC audience the broker expects. Default `crabd-broker`. |
@@ -89,7 +89,7 @@ Set on the deployed [broker](/self-hosting/#run-your-own-broker), not in consume
 
 | Variable | Description |
 | --- | --- |
-| `CRABD_APP_ID` / `CRABD_APP_PRIVATE_KEY` | The canonical crab'd App credentials the broker holds. |
+| `CRABD_APP_ID` / `CRABD_APP_PRIVATE_KEY` | The canonical crab'd App credentials the broker holds. The key may be a raw PEM or base64-encoded. |
 | `CRABD_BROKER_AUDIENCE` | Audience the broker requires. Default `crabd-broker`. |
 | `PORT` | Node listen port. Default `8787`. |
 

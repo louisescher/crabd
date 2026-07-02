@@ -2,6 +2,16 @@ import { createAppAuth } from '@octokit/auth-app';
 import { Octokit } from '@octokit/rest';
 import type { AuthProvider } from './types.ts';
 
+/**
+ * Accept the App private key as a raw PEM **or** a base64-encoded PEM. Base64 is the
+ * easier form to pass through an env var (no newlines); a non-PEM value is decoded.
+ */
+export function normalizePrivateKey(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.includes('-----BEGIN')) return trimmed;
+  return Buffer.from(trimmed, 'base64').toString('utf-8').trim();
+}
+
 export interface GitHubAppAuthOptions {
   appId: string | number;
   privateKey: string;
@@ -25,6 +35,7 @@ export interface GitHubAppAuthOptions {
 export class GitHubAppAuth implements AuthProvider {
   readonly kind = 'github' as const;
   private readonly auth: ReturnType<typeof createAppAuth>;
+  private readonly privateKey: string;
   private installationId?: number;
   private cached?: { token: string; expiresAt: number };
 
@@ -32,7 +43,9 @@ export class GitHubAppAuth implements AuthProvider {
     if (options.installationId != null && options.installationId !== '') {
       this.installationId = Number(options.installationId);
     }
-    this.auth = createAppAuth({ appId: options.appId, privateKey: options.privateKey });
+    // Accept a raw PEM or a base64-encoded PEM.
+    this.privateKey = normalizePrivateKey(options.privateKey);
+    this.auth = createAppAuth({ appId: options.appId, privateKey: this.privateKey });
   }
 
   private async resolveInstallationId(): Promise<number> {
@@ -42,7 +55,7 @@ export class GitHubAppAuth implements AuthProvider {
     }
     const appOctokit = new Octokit({
       authStrategy: createAppAuth,
-      auth: { appId: this.options.appId, privateKey: this.options.privateKey },
+      auth: { appId: this.options.appId, privateKey: this.privateKey },
       ...(this.options.baseUrl ? { baseUrl: this.options.baseUrl } : {}),
     });
     const { data } = await appOctokit.apps.getRepoInstallation({

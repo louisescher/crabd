@@ -56,9 +56,11 @@ CRABD_APP_ID=... CRABD_APP_PRIVATE_KEY=... CRABD_BROKER_AUDIENCE=crabd-broker cr
 
 ### Bring your own App (no broker)
 
-Prefer to hold the key yourself? Create your own App from the manifest (`app/register.html` or
-`app/manifest.json`), store `CRABD_APP_ID` / `CRABD_APP_PRIVATE_KEY` as secrets, and pass them as
-`app-id` / `app-private-key`. The installation ID is auto-resolved. This overrides the broker path.
+Prefer to hold the key yourself? Open `app/register.html`. It opens GitHub's *New GitHub App* form
+pre-filled (no server needed). Create the App, generate a private key, install it, then store
+`CRABD_APP_ID` / `CRABD_APP_PRIVATE_KEY` as secrets and pass them as `app-id` / `app-private-key`. The
+installation ID is auto-resolved. This overrides the broker path. See
+[`app/README.md`](https://github.com/louisescher/crabd/blob/main/app/README.md) for the full walkthrough.
 
 ### Token (github-actions identity)
 

@@ -5,6 +5,17 @@ import { verifyOidc, type OidcClaims } from './verify.ts';
 export { extractClaims, verifyOidc, type OidcClaims } from './verify.ts';
 export { mintInstallationToken, type MintedToken, type MintOptions } from './mint.ts';
 
+/**
+ * Accept the App private key as a raw PEM **or** a base64-encoded PEM. A PEM has
+ * newlines that are awkward in an env var, so base64 is the easier form to pass in;
+ * a value that isn't already PEM is base64-decoded.
+ */
+export function normalizePrivateKey(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.includes('-----BEGIN')) return trimmed;
+  return Buffer.from(trimmed, 'base64').toString('utf-8').trim();
+}
+
 export interface BrokerDeps {
   /** OIDC audience the broker requires (must match the action's request). */
   audience: string;
@@ -63,11 +74,12 @@ export function createBroker(deps: BrokerDeps): Hono {
 /** Build the broker from environment secrets (`CRABD_APP_ID`, `CRABD_APP_PRIVATE_KEY`). */
 export function buildFromEnv(env: NodeJS.ProcessEnv = process.env): Hono {
   const appId = env.CRABD_APP_ID;
-  const privateKey = env.CRABD_APP_PRIVATE_KEY;
+  const rawKey = env.CRABD_APP_PRIVATE_KEY;
   const audience = env.CRABD_BROKER_AUDIENCE ?? 'crabd-broker';
-  if (!appId || !privateKey) {
+  if (!appId || !rawKey) {
     throw new Error('crabd-broker: set CRABD_APP_ID and CRABD_APP_PRIVATE_KEY');
   }
+  const privateKey = normalizePrivateKey(rawKey);
   return createBroker({
     audience,
     verify: verifyOidc,

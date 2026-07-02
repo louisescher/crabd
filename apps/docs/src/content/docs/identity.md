@@ -51,8 +51,9 @@ Run your own broker (`@crabd/broker`, Node or Cloudflare) and point at it with `
 
 ## 2. Your own GitHub App
 
-Hold the key yourself. Good for a single org that doesn't want to depend on a broker. Create the App
-from the [manifest](/self-hosting/#authentication--identity), install it, and pass its credentials:
+Hold the key yourself. Good for a single org that doesn't want to depend on a broker.
+[Create the App](/self-hosting/#authentication--identity) (open `app/register.html`), install it, and
+pass its credentials:
 
 ```yaml title="workflow"
 - uses: louisescher/crabd@v1

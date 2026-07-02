@@ -1,6 +1,7 @@
 {
   "name": "crab'd",
   "url": "https://github.com/louisescher/crabd",
+  "redirect_url": "https://github.com/louisescher/crabd",
   "description": "crab'd answers @-mentions, reviews pull requests, and implements issues.",
   "public": true,
   "default_events": ["issue_comment", "issues", "pull_request"],
@@ -11,6 +12,7 @@
     "metadata": "read"
   },
   "hook_attributes": {
+    "url": "https://github.com/louisescher/crabd",
     "active": false
   }
 }
