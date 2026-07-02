@@ -24,11 +24,20 @@ and notes the branch in its reply.
 **Triggered by** a pull request being opened, reopened, or marked ready for review, **not** on every
 push to the PR. To re-review after changes, comment `/crabd review`.
 
-crab'd reads the diff and posts a review: a summary, a verdict (`APPROVE`, `COMMENT`, or
-`REQUEST_CHANGES`), and inline findings anchored to file and line.
+crab'd reads the diff and posts a review: a summary, inline findings anchored to file and line, and a
+plain-language verdict (**Good to merge (LGTM)**, **Nits found**, or **Please address the findings
+before merging**, mapping to approve / comment / request-changes).
 
 ```text
 /crabd Please review. Focus on the migration and error handling.
+```
+
+To keep crab'd from formally approving or blocking PRs, set `review.comment_only: true`. It then
+always posts a plain comment while still showing the verdict in the summary:
+
+```yaml title=".crabd.yml"
+review:
+  comment_only: true
 ```
 
 ## implement

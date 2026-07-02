@@ -19,6 +19,13 @@ export const ReviewOutputSchema = v.object({
 
 export type ReviewOutput = v.InferOutput<typeof ReviewOutputSchema>;
 
+/** The verdict as a plain-language sentence (the raw enum is kept for the forge API). */
+const VERDICT_LABEL: Record<ReviewOutput['verdict'], string> = {
+  APPROVE: 'Good to merge (LGTM)',
+  COMMENT: 'Nits found',
+  REQUEST_CHANGES: 'Please address the findings before merging',
+};
+
 /** Auto-review mode: analyze the PR diff and post a review with inline findings. */
 export const reviewMode: ModeDefinition<ReviewOutput> = {
   name: 'review',
@@ -29,11 +36,24 @@ export const reviewMode: ModeDefinition<ReviewOutput> = {
     if (number === undefined) {
       return { summary: ctx.data.summary };
     }
+
+    // `comment_only` keeps crab'd from formally approving/blocking a PR: post a plain
+    // COMMENT review regardless of verdict. The verdict still shows in the summary.
+    const event = ctx.config.review.commentOnly ? 'COMMENT' : ctx.data.verdict;
     await ctx.adapter.postReview(number, {
       body: ctx.data.summary,
-      event: ctx.data.verdict,
+      event, // GitHub/Forgejo require a raw APPROVE/COMMENT/REQUEST_CHANGES value
       comments: ctx.data.findings,
     });
-    return { summary: `${ctx.data.summary}\n\n_Verdict: ${ctx.data.verdict}, ${ctx.data.findings.length} inline finding(s)._` };
+
+    const count = ctx.data.findings.length;
+    const suffix = count === 0 ? '' : ` (${count} inline finding${count === 1 ? '' : 's'})`;
+    const verdictLine = `**${VERDICT_LABEL[ctx.data.verdict]}.**${suffix}`;
+    return {
+      summary: `${ctx.data.summary}\n\n${verdictLine}`,
+      // The full summary is in the posted review; keep the tracking comment short so it
+      // isn't duplicated. See finalizeRun.
+      trackingComment: `🦀 Reviewed this pull request — ${verdictLine}`,
+    };
   },
 };

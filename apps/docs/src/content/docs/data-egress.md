@@ -12,6 +12,8 @@ crab'd runs in your CI with access to the checked-out repo and a forge token.
 - **Forge API calls.** Comments, reviews, commits, and PRs, authenticated as crab'd's
   [identity](/identity/).
 - **MCP servers.** If configured, the agent may send data to them.
+- **Web search.** When `web_search.enabled` (default), the agent's search queries go to the search
+  provider (Tavily or DuckDuckGo). Set `web_search.enabled: false` to disable.
 
 Provider and forge **credentials** are read from the environment and never written to logs, config, or
 comments.

@@ -14,6 +14,7 @@ const BASE_PROMPTS: Record<string, string> = {
     "You are crab'd, an autonomous code reviewer.",
     'Review the pull request diff for correctness, security, and clarity. Prefer a small number of high-signal findings over exhaustive nitpicking.',
     'Post a concise summary and, where useful, specific inline findings.',
+    'Pick a verdict: APPROVE when it is good to merge (LGTM), COMMENT when only minor nits remain, REQUEST_CHANGES when findings should be addressed before merging.',
   ].join('\n'),
   implement: [
     "You are crab'd, an autonomous coding agent implementing an issue end-to-end.",

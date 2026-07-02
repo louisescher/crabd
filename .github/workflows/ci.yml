@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Consumers resolve @crabd/config and @crabd/core to their built dist/*.d.ts,
+      # so the libraries must be built before typecheck/test. (action/broker don't
+      # need pre-building; docs is excluded entirely.)
+      - name: Build libraries
+        run: pnpm --filter @crabd/config --filter @crabd/core run build
+
+      - name: Typecheck
+        run: >-
+          pnpm --filter @crabd/config --filter @crabd/core
+          --filter @crabd/action --filter @crabd/broker run typecheck
+
+      - name: Test
+        run: >-
+          pnpm --filter @crabd/config --filter @crabd/core
+          --filter @crabd/action --filter @crabd/broker run test

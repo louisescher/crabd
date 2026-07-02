@@ -16,6 +16,8 @@ export {
   type PermissionsPartial,
   type PromptPartial,
   type ProvidersPartial,
+  type ReviewPartial,
+  type WebSearchPartial,
   type ThinkingLevel,
 } from './schema.ts';
 

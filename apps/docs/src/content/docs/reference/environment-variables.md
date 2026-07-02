@@ -51,6 +51,7 @@ variables for you. Set the rest via the workflow's `env:` (secrets for anything 
 | Variable | Description |
 | --- | --- |
 | `CRABD_OLLAMA_BASE_URL` | Registers a local Ollama provider at this OpenAI-compatible URL. |
+| `TAVILY_API_KEY` | Enables reliable web search for the agent's `web_search` tool (falls back to keyless DuckDuckGo when unset). |
 
 The egress gateway is configured via [`providers.gateway_url`](/reference/config-yaml/#providers) in
 `.crabd.yml`, not by hand.
@@ -106,6 +107,7 @@ non-Actions embedding.
 | `CRABD_CUSTOM_PROVIDERS` | JSON of resolved custom providers to register. |
 | `CRABD_GATEWAY_URL` / `CRABD_GATEWAY_PROVIDERS` | Gateway base URL and the built-in providers to route through it (from `providers.gateway_url`). |
 | `CRABD_MCP` | JSON of MCP servers to connect. |
+| `CRABD_WEB_SEARCH` | JSON of the resolved web-search config (`enabled`, `maxResults`). |
 | `CRABD_EXTENSION_PATH` | Absolute path to `crabd.config.ts`. |
 | `CRABD_SANDBOX_ENV` | JSON of extra env vars exposed to the sandbox (empty by default). |
 | `CRABD_FORGE_TOKEN`, `CRABD_REPO_OWNER`, `CRABD_REPO_NAME`, `CRABD_REPO_DEFAULT_BRANCH`, `CRABD_TRACKING_ID`, `CRABD_SUBJECT` | Wiring for the live-progress tool. |
