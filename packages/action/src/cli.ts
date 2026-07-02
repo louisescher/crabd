@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
-import { createRequire } from 'node:module';
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadCrabdExtension } from '@crabd/config';
@@ -18,20 +17,37 @@ import {
 import { loadResolvedConfig } from './config-loader.ts';
 import { buildForge, detectForge } from './forge-factory.ts';
 
-const require = createRequire(import.meta.url);
 const ACTION_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 function log(message: string): void {
   process.stderr.write(`[crabd] ${message}\n`);
 }
 
-/** Locate the flue CLI entry so we can run the model turn as a one-shot subprocess. */
+/**
+ * Locate the flue CLI entry so we can run the model turn as a one-shot subprocess.
+ * `@flue/cli` only exposes `./config` (ESM-only, no `require` condition), so we use
+ * `import.meta.resolve` — not `require.resolve` — then walk up to the package root
+ * to read its `bin`.
+ */
 function flueCliEntry(): string {
-  const pkgPath = require.resolve('@flue/cli/package.json');
-  const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as { bin?: Record<string, string> | string };
-  const bin = typeof pkg.bin === 'string' ? pkg.bin : (pkg.bin?.flue ?? Object.values(pkg.bin ?? {})[0]);
-  if (!bin) throw new Error('crabd: could not locate the flue CLI bin');
-  return join(dirname(pkgPath), bin);
+  const resolver = import.meta as unknown as { resolve(specifier: string): string };
+  const configEntry = fileURLToPath(resolver.resolve('@flue/cli/config'));
+  let dir = dirname(configEntry);
+  for (let i = 0; i < 12 && dir !== dirname(dir); i++) {
+    const pkgFile = join(dir, 'package.json');
+    if (existsSync(pkgFile)) {
+      const pkg = JSON.parse(readFileSync(pkgFile, 'utf-8')) as {
+        name?: string;
+        bin?: Record<string, string> | string;
+      };
+      if (pkg.name === '@flue/cli' && pkg.bin) {
+        const bin = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin.flue;
+        if (bin) return join(dir, bin);
+      }
+    }
+    dir = dirname(dir);
+  }
+  throw new Error('crabd: could not locate the flue CLI entry');
 }
 
 /** Extract image URLs from markdown (`![](url)`) and bare image links in text. */

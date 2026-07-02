@@ -21,7 +21,9 @@ Open [`register.html`](./register.html) in a browser — it opens GitHub's *New 
 1. Click **Create GitHub App**. Names are globally unique on GitHub, so if `crabd` is taken, pick
    another (e.g. `crabd-yourname`).
 2. On the App's page, note the **App ID** and click **Generate a private key** (downloads a `.pem`).
-3. Open **Install App** and install it on the repos/org crab'd should act on.
+3. Under **Display information**, upload a **logo**. This is the avatar shown on crab'd's comments and
+   reactions. Use [`../apps/docs/public/favicon.png`](../apps/docs/public/favicon.png) or your own.
+4. Open **Install App** and install it on the repos/org crab'd should act on.
 
 Permissions requested: `contents`, `issues`, `pull_requests` (write) and `metadata` (read). Events:
 `issue_comment`, `issues`, `pull_request`.
