@@ -1,6 +1,6 @@
 {
   "name": "@crabd/broker",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -12,7 +12,9 @@
   "bin": {
     "crabd-broker": "./dist/node.mjs"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "start": "node dist/node.mjs",
     "build": "tsdown",
