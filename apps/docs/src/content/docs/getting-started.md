@@ -44,11 +44,9 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-:::note
 `id-token: write` lets crab'd post as the canonical **crab'd[bot]** via the token broker — install the
 crab'd GitHub App on your repo first. Prefer to hold your own key, or no App at all? See
 [Operating crab'd](/self-hosting/#authentication--identity).
-:::
 
 :::note
 crab'd reads the model provider key straight from the environment (`ANTHROPIC_API_KEY`,
