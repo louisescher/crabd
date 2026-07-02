@@ -29,6 +29,7 @@ export default defineConfig({
       description:
         "A forge-agnostic, multi-provider agent for @-mentions, PR reviews, and issue implementation on GitHub and Forgejo.",
       favicon: '/favicon.png',
+      logo: { src: './src/assets/logo.png', alt: "crab'd" },
       components: {
         // Injects the self-hosted Fraunces <Font> into <head>.
         Head: './src/components/Head.astro',

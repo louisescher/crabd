@@ -1,0 +1,8 @@
+**/node_modules
+**/dist
+**/.astro
+.git
+*.log
+apps/docs/src
+apps/docs/public
+packages/broker/src

@@ -1,5 +1,6 @@
 name: "crab'd"
 description: "Forge-agnostic, multi-provider agent for @-mentions, PR reviews, and issue implementation."
+author: "louisescher"
 branding:
   icon: "cpu"
   color: "orange"
@@ -9,10 +10,10 @@ inputs:
     description: "Default model specifier (<provider>/<model>). Overrides config."
     required: false
   trigger-phrase:
-    description: "Mention phrase that triggers crab'd (default /crabd)."
+    description: "Phrase that triggers crab'd (default /crabd)."
     required: false
   providers:
-    description: "Comma-separated provider allowlist (e.g. anthropic,openai)."
+    description: "Comma-separated provider allowlist (empty = allow any)."
     required: false
   thinking-level:
     description: "Reasoning effort: off|minimal|low|medium|high|xhigh."
@@ -27,7 +28,7 @@ inputs:
     description: "GitHub App ID — self-host your own App instead of the broker."
     required: false
   app-private-key:
-    description: "GitHub App private key (PEM)."
+    description: "GitHub App private key (raw PEM or base64-encoded)."
     required: false
   app-installation-id:
     description: "GitHub App installation ID (optional; auto-resolved from the repo)."
@@ -42,29 +43,23 @@ inputs:
 outputs:
   mode:
     description: "The mode crab'd ran (mention/review/implement), if any."
-    value: ${{ steps.crabd.outputs.mode }}
   result:
     description: "The validated structured output the model produced, as JSON."
-    value: ${{ steps.crabd.outputs.result }}
   summary:
     description: "Human-readable summary of what crab'd did."
-    value: ${{ steps.crabd.outputs.summary }}
 
 runs:
-  using: composite
-  steps:
-    - id: crabd
-      shell: bash
-      run: node "${{ github.action_path }}/dist/cli.mjs"
-      env:
-        CRABD_INPUT_MODEL: ${{ inputs.model }}
-        CRABD_INPUT_TRIGGER_PHRASE: ${{ inputs.trigger-phrase }}
-        CRABD_INPUT_PROVIDERS: ${{ inputs.providers }}
-        CRABD_INPUT_THINKING_LEVEL: ${{ inputs.thinking-level }}
-        CRABD_GITHUB_TOKEN: ${{ inputs.github-token }}
-        CRABD_BROKER_URL: ${{ inputs.broker-url }}
-        CRABD_APP_ID: ${{ inputs.app-id }}
-        CRABD_APP_PRIVATE_KEY: ${{ inputs.app-private-key }}
-        CRABD_APP_INSTALLATION_ID: ${{ inputs.app-installation-id }}
-        CRABD_ORG_CONFIG_REPO: ${{ inputs.org-config-repo }}
-        CRABD_FORGE: ${{ inputs.forge }}
+  using: docker
+  image: docker://ghcr.io/louisescher/crabd:v1
+  env:
+    CRABD_INPUT_MODEL: ${{ inputs.model }}
+    CRABD_INPUT_TRIGGER_PHRASE: ${{ inputs.trigger-phrase }}
+    CRABD_INPUT_PROVIDERS: ${{ inputs.providers }}
+    CRABD_INPUT_THINKING_LEVEL: ${{ inputs.thinking-level }}
+    CRABD_GITHUB_TOKEN: ${{ inputs.github-token }}
+    CRABD_BROKER_URL: ${{ inputs.broker-url }}
+    CRABD_APP_ID: ${{ inputs.app-id }}
+    CRABD_APP_PRIVATE_KEY: ${{ inputs.app-private-key }}
+    CRABD_APP_INSTALLATION_ID: ${{ inputs.app-installation-id }}
+    CRABD_ORG_CONFIG_REPO: ${{ inputs.org-config-repo }}
+    CRABD_FORGE: ${{ inputs.forge }}

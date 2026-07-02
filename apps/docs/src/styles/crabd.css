@@ -11,11 +11,17 @@
  */
 .sl-markdown-content :is(h1, h2, h3, h4, h5, h6),
 .content-panel h1,
-.hero h1 {
+.hero h1,
+.site-title {
   font-family: var(--crabd-serif);
   font-optical-sizing: auto;
   font-weight: 600;
   letter-spacing: -0.01em;
+}
+
+/* Header site title: serif text next to the logo. */
+.site-title {
+  font-size: var(--sl-text-h4);
 }
 
 /* Dark theme (Starlight default). */
