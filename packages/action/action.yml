@@ -9,7 +9,7 @@ inputs:
     description: "Default model specifier (<provider>/<model>). Overrides config."
     required: false
   trigger-phrase:
-    description: "Mention phrase that triggers crab'd (default @crabd)."
+    description: "Mention phrase that triggers crab'd (default /crabd)."
     required: false
   providers:
     description: "Comma-separated provider allowlist (e.g. anthropic,openai)."

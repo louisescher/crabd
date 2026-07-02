@@ -101,7 +101,7 @@ export const CrabdConfigPartialSchema = v.object({
   version: v.optional(v.literal(1)),
   /** Default model specifier `<provider>/<model>`. */
   model: v.optional(v.string()),
-  /** Mention phrase that triggers crab'd (e.g. `@crabd`). */
+  /** Mention phrase that triggers crab'd (e.g. `/crabd`). */
   trigger_phrase: v.optional(v.string()),
   thinking_level: v.optional(ThinkingLevelSchema),
   providers: v.optional(ProvidersPartialSchema),
@@ -119,7 +119,7 @@ export type CrabdConfigPartial = v.InferOutput<typeof CrabdConfigPartialSchema>;
 export const DEFAULT_CONFIG: CrabdConfigPartial = {
   version: 1,
   model: 'anthropic/claude-sonnet-5',
-  trigger_phrase: '@crabd',
+  trigger_phrase: '/crabd',
   thinking_level: 'medium',
   providers: {
     // Empty = allow any provider. crab'd works with zero config; set this to restrict egress.

@@ -43,6 +43,6 @@ house rules. (Consider the `configure-crabd` skill for a fuller config.)
 
 ## 5. Commit & test
 
-Commit the workflow (and `.crabd.yml`), then trigger a run: comment `@crabd hello` on an issue, or
+Commit the workflow (and `.crabd.yml`), then trigger a run: comment `/crabd hello` on an issue, or
 open a PR. Confirm the 👀 reaction and the tracking comment appear, and that the bot identity is what
 you expect.

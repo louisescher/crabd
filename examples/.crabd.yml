@@ -2,7 +2,7 @@
 # Every field is optional, omit anything to take the built-in default.
 
 model: anthropic/claude-sonnet-4-6
-trigger_phrase: "@crabd"
+trigger_phrase: "/crabd"
 thinking_level: medium
 
 providers:

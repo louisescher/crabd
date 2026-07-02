@@ -18,10 +18,10 @@ instructions.
 
 | claude-code-action | crab'd |
 | --- | --- |
-| `@claude` mention | `@crabd` mention (set `trigger_phrase` to keep `@claude` if desired) |
+| `@claude` mention | `/crabd` mention (set `trigger_phrase` to keep `@claude` if desired) |
 | model input (Claude only) | `model: <provider>/<model>` — any provider |
 | `custom_instructions` / CLAUDE.md guidance | `prompt.instructions` (global) or per-mode `modes.*.instructions` |
-| PR review behavior | `review` mode (fires on PR opened/reopened/ready_for_review, or `@crabd review`) |
+| PR review behavior | `review` mode (fires on PR opened/reopened/ready_for_review, or `/crabd review`) |
 | implement / fix an issue | `implement` mode |
 | `mcp_config` | `mcp:` servers in `.crabd.yml` |
 | `max_turns` / timeout | `limits.max_turns` (hard) / `limits.timeout_minutes` |
@@ -31,7 +31,7 @@ instructions.
 
 Replace the action step with `louisescher/crabd@v1`. Prefer OIDC identity (`permissions: id-token:
 write`) for the canonical bot, or App credentials. Keep the same event triggers, but note review fires
-on `opened/reopened/ready_for_review` (not every push) — re-review via `@crabd review`.
+on `opened/reopened/ready_for_review` (not every push) — re-review via `/crabd review`.
 
 Start from `workflows/github/crabd.yml` in the crab'd repo.
 

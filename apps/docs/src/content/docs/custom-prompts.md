@@ -61,7 +61,7 @@ You don't need config for one-off guidance. Anything after the mention is passed
 agent, for any mode:
 
 ```text
-@crabd Please review. Focus on the auth refactor, ignore the generated files.
+/crabd Please review. Focus on the auth refactor, ignore the generated files.
 ```
 
 See [Modes](/modes/) for how post-mention text maps to each mode.

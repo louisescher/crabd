@@ -7,7 +7,7 @@ export interface TriggerResult {
   mode: string;
   /**
    * Free-text the user wrote after the mention (and after any mode keyword).
-   * Threaded into every mode so `@crabd review focus on the migration` actually steers.
+   * Threaded into every mode so `/crabd review focus on the migration` actually steers.
    */
   userInstruction?: string;
 }
@@ -33,7 +33,7 @@ function afterPhrase(body: string, phrase: string): string | null {
 
 /**
  * If the mention starts with an enabled mode name (built-in or custom), select that
- * mode and treat the rest as the instruction. This is how `@crabd triage …` reaches a
+ * mode and treat the rest as the instruction. This is how `/crabd triage …` reaches a
  * custom `triage` mode — any registered mode name works, not just review/implement.
  */
 function splitModeKeyword(rest: string, modes: ReadonlySet<string>): { mode?: string; instruction: string } {
@@ -72,7 +72,7 @@ export function detectTrigger(event: ForgeEvent, options: DetectOptions): Trigge
 
   if (event.kind === 'pull_request') {
     // Review on open / reopen / un-draft only — not `synchronize` (a push to the PR).
-    // To re-review after changes, mention `@crabd review`.
+    // To re-review after changes, mention `/crabd review`.
     if (['opened', 'reopened', 'ready_for_review'].includes(event.action)) {
       return gate({ mode: 'review' });
     }

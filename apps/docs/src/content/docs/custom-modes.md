@@ -8,15 +8,15 @@ The three built-in modes cover most needs, but the mode registry is open. Define
 
 :::tip
 A custom mode's **name is its trigger keyword automatically** — register a `triage` mode and
-`@crabd triage …` routes to it, with the rest of the comment passed as the instruction. Disabling a
-mode in config removes its keyword (an explicit `@crabd <disabled>` then does nothing).
+`/crabd triage …` routes to it, with the rest of the comment passed as the instruction. Disabling a
+mode in config removes its keyword (an explicit `/crabd <disabled>` then does nothing).
 :::
 
 ## Anatomy of a mode
 
 A mode declares:
 
-- a **name** (also the mention keyword, e.g. `@crabd triage`),
+- a **name** (also the mention keyword, e.g. `/crabd triage`),
 - an **output schema** (the structured result the model must produce), and
 - a **`finalize`** step that performs the forge side effects from that output.
 

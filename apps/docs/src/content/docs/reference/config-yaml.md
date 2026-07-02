@@ -13,7 +13,7 @@ default. For how these values combine across the org repo, the repo file, CI inp
 | --- | --- | --- | --- |
 | `version` | `1` | `1` | Config schema version. |
 | `model` | `string` | `anthropic/claude-sonnet-5` | Default model specifier, `<provider>/<model>`. Its provider must be allowlisted. |
-| `trigger_phrase` | `string` | `@crabd` | The mention phrase that triggers crab'd. |
+| `trigger_phrase` | `string` | `/crabd` | The mention phrase that triggers crab'd. |
 | `thinking_level` | `'off' \| 'minimal' \| 'low' \| 'medium' \| 'high' \| 'xhigh'` | `medium` | Reasoning effort. |
 | `providers` | `object` | — | Provider allowlist, gateway, and custom providers. See below. |
 | `permissions` | `object` | — | Who may trigger crab'd. See below. |

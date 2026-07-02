@@ -47,7 +47,7 @@ describe('loadResolvedConfig', () => {
     // providers.allowlist is org-locked, so the CRABD_INPUT_PROVIDERS override is ignored.
     expect(config.providers.allowlist).toEqual(['anthropic']);
     // Default trigger phrase remains.
-    expect(config.triggerPhrase).toBe('@crabd');
+    expect(config.triggerPhrase).toBe('/crabd');
   });
 
   it('falls back to defaults when no org config exists', async () => {

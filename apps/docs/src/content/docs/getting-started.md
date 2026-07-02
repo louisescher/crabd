@@ -59,7 +59,7 @@ crab'd reads the model provider key straight from the environment (`ANTHROPIC_AP
 
 Once the workflow is committed, try any of these:
 
-- **Mention** — comment `@crabd how does the auth middleware work?` on an issue or PR.
+- **Mention** — comment `/crabd how does the auth middleware work?` on an issue or PR.
 - **Review** — open a pull request; crab'd reviews the diff automatically.
 - **Implement** — assign an issue to crab'd (or label it) to have it open a PR.
 
@@ -70,7 +70,7 @@ crab'd posts a "working..." comment, then updates it in place with the result.
 Anything you write after the mention is passed to the agent, so you can steer any mode:
 
 ```text
-@crabd review — focus on the database migration and error handling
+/crabd review — focus on the database migration and error handling
 ```
 
 ## Next steps

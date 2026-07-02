@@ -10,7 +10,7 @@ Add a mode to `crabd.config.ts`. A mode = a name (its trigger keyword), a Valibo
 
 ## 1. Clarify the mode
 
-- **Name** — becomes the keyword: `@crabd <name> …`.
+- **Name** — becomes the keyword: `/crabd <name> …`.
 - **What the model must produce** — the structured output shape.
 - **What crab'd should do with it** — comment, review, commit, open a PR?
 
@@ -49,5 +49,5 @@ export default defineCrabdConfig({
 
 ## 4. Enable & test
 
-Custom modes are enabled by default. Trigger with `@crabd <name> …` and confirm the run posts what
+Custom modes are enabled by default. Trigger with `/crabd <name> …` and confirm the run posts what
 `finalize` returns. To disable, set `modes.<name>.enabled: false` in `.crabd.yml`.

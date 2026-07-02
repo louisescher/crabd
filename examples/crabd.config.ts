@@ -13,7 +13,7 @@ export default defineCrabdConfig({
     }),
   },
 
-  // Register a custom mode. Triggered via `@crabd triage`.
+  // Register a custom mode. Triggered via `/crabd triage`.
   modes: [
     {
       name: 'triage',

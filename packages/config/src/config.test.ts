@@ -38,7 +38,7 @@ describe('resolveConfig — defaults', () => {
   it('fills every field from built-in defaults', () => {
     const r = resolveConfig({ layers: {} });
     expect(r.model).toBe('anthropic/claude-sonnet-5');
-    expect(r.triggerPhrase).toBe('@crabd');
+    expect(r.triggerPhrase).toBe('/crabd');
     expect(r.thinkingLevel).toBe('medium');
     expect(r.providers.allowlist).toEqual([]);
     expect(r.limits.maxTurns).toBe(40);

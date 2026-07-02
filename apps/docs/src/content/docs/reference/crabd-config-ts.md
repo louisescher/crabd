@@ -42,7 +42,7 @@ A mode turns one event into one agent run: it declares the output schema the mod
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `name` | `string` | Mode name; also the mention sub-command (`@crabd <name> ...`). |
+| `name` | `string` | Mode name; also the mention sub-command (`/crabd <name> ...`). |
 | `outputSchema` | `ValibotSchema` | The structured output the model must produce and that `finalize` receives. |
 | `tools` | `string[]` | Forge operations the mode uses (descriptive). |
 | `finalize` | `(ctx: FinalizeContext) => Promise<FinalizeResult>` | Performs forge side effects from the validated output. |
