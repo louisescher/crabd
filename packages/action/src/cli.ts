@@ -158,6 +158,7 @@ async function main(): Promise<number> {
     }
   }
   if (config.mcp.length > 0) process.env.CRABD_MCP = JSON.stringify(config.mcp);
+  process.env.CRABD_WEB_SEARCH = JSON.stringify(config.webSearch);
   if (config.limits.timeoutMinutes) {
     process.env.CRABD_TIMEOUT_MS = String(Math.round(config.limits.timeoutMinutes * 60_000));
   }

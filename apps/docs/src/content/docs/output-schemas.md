@@ -32,7 +32,7 @@ The action exposes the validated output as `result`:
 
 ```yaml title="workflow"
 - id: crabd
-  uses: louisescher/crabd@v1
+  uses: louisescher/crabd@v0
   with:
     model: anthropic/claude-sonnet-4-6
 

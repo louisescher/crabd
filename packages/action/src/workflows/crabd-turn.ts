@@ -23,6 +23,7 @@ import {
   type TrackingComment,
 } from '@crabd/core';
 import { loadCrabdExtension } from '@crabd/config';
+import { webSearchTools } from '../tools/websearch.ts';
 
 registerBuiltinModes();
 
@@ -149,6 +150,21 @@ async function fetchImages(urls: string[]): Promise<{ type: 'image'; data: strin
   return images;
 }
 
+/** Web-search / fetch tools, unless disabled via config (passed as CRABD_WEB_SEARCH). */
+function configuredWebSearchTools(): ToolDefinition[] {
+  const raw = process.env.CRABD_WEB_SEARCH;
+  let cfg: { enabled?: boolean; maxResults?: number } = {};
+  if (raw) {
+    try {
+      cfg = JSON.parse(raw);
+    } catch {
+      cfg = {};
+    }
+  }
+  if (cfg.enabled === false) return [];
+  return webSearchTools({ maxResults: cfg.maxResults ?? 5 });
+}
+
 export default defineWorkflow({
   agent,
   input: v.object({
@@ -163,7 +179,7 @@ export default defineWorkflow({
 
     const [connected, images] = await Promise.all([mcpTools(), fetchImages(input.images ?? [])]);
     const progress = progressTool(input.mode);
-    const tools = progress ? [progress, ...connected] : connected;
+    const tools = [...(progress ? [progress] : []), ...connected, ...configuredWebSearchTools()];
 
     const session = await harness.session();
     const handle = session.prompt(input.message, {

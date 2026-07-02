@@ -9,7 +9,7 @@ For more information, read the [documentation](https://crabd.lou.gg).
 ## Using the action
 
 ```yaml
-- uses: louisescher/crabd@v1
+- uses: louisescher/crabd@v0
   with:
     model: anthropic/claude-sonnet-5
   env:

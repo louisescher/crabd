@@ -71,6 +71,24 @@ export const PermissionsPartialSchema = v.object({
 });
 export type PermissionsPartial = v.InferOutput<typeof PermissionsPartialSchema>;
 
+export const WebSearchPartialSchema = v.object({
+  /** Whether the agent gets `web_search` / `fetch_url` tools to research current info. */
+  enabled: v.optional(v.boolean()),
+  /** Max results returned per search. */
+  max_results: v.optional(v.number()),
+});
+export type WebSearchPartial = v.InferOutput<typeof WebSearchPartialSchema>;
+
+export const ReviewPartialSchema = v.object({
+  /**
+   * When true, crab'd posts every review as a plain COMMENT — it never formally
+   * approves or requests changes (so it can't block or approve a PR). The verdict is
+   * still computed and shown in the summary.
+   */
+  comment_only: v.optional(v.boolean()),
+});
+export type ReviewPartial = v.InferOutput<typeof ReviewPartialSchema>;
+
 export const LimitsPartialSchema = v.object({
   /** Hard ceiling on tool-calling turns. The run is stopped if it's exceeded. */
   max_turns: v.optional(v.number()),
@@ -106,6 +124,8 @@ export const CrabdConfigPartialSchema = v.object({
   thinking_level: v.optional(ThinkingLevelSchema),
   providers: v.optional(ProvidersPartialSchema),
   permissions: v.optional(PermissionsPartialSchema),
+  review: v.optional(ReviewPartialSchema),
+  web_search: v.optional(WebSearchPartialSchema),
   prompt: v.optional(PromptPartialSchema),
   limits: v.optional(LimitsPartialSchema),
   modes: v.optional(v.record(v.string(), ModePartialSchema)),
@@ -128,6 +148,13 @@ export const DEFAULT_CONFIG: CrabdConfigPartial = {
   },
   permissions: {
     allowed_associations: ['OWNER', 'MEMBER', 'COLLABORATOR'],
+  },
+  review: {
+    comment_only: false,
+  },
+  web_search: {
+    enabled: true,
+    max_results: 5,
   },
   prompt: {
     instructions: '',

@@ -17,6 +17,8 @@ default. For how these values combine across the org repo, the repo file, CI inp
 | `thinking_level` | `'off' \| 'minimal' \| 'low' \| 'medium' \| 'high' \| 'xhigh'` | `medium` | Reasoning effort. |
 | `providers` | `object` | — | Provider allowlist, gateway, and custom providers. See below. |
 | `permissions` | `object` | — | Who may trigger crab'd. See below. |
+| `review` | `object` | — | Review-mode behavior. See below. |
+| `web_search` | `object` | — | Web research tools for the agent. See below. |
 | `prompt` | `object` | — | Prompt customization. See below. |
 | `limits` | `object` | — | Run limits. See below. |
 | `modes` | `map<string, Mode>` | built-ins enabled | Per-mode configuration. See below. |
@@ -45,6 +47,34 @@ default. For how these values combine across the org repo, the repo file, CI inp
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `allowed_associations` | `string[]` | `[OWNER, MEMBER, COLLABORATOR]` | Author-associations allowed to trigger crab'd. Bots are always denied. |
+
+## `review`
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `comment_only` | `boolean` | `false` | When `true`, crab'd posts every review as a plain **comment**. It never formally approves or requests changes, so it can't approve or block a PR. The verdict is still computed and shown in the summary. |
+
+The review verdict maps to a plain-language line in the summary (and, unless `comment_only`, to the
+forge review action):
+
+| Summary says | Forge review |
+| --- | --- |
+| **Good to merge (LGTM)** | Approve |
+| **Nits found** | Comment |
+| **Please address the findings before merging** | Request changes |
+
+## `web_search`
+
+Gives the agent `web_search` and `fetch_url` tools so it can research current information (library
+versions, changelogs, APIs, issues) instead of relying on stale training data.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `enabled` | `boolean` | `true` | Whether the agent gets the web tools. |
+| `max_results` | `number` | `5` | Max results per search. |
+
+Search uses [Tavily](https://tavily.com) when `TAVILY_API_KEY` is set (recommended, reliable), and
+falls back to a best-effort keyless DuckDuckGo search otherwise. `fetch_url` needs no key.
 
 ## `prompt`
 

@@ -41,7 +41,7 @@ permissions:
   id-token: write
 steps:
   - uses: actions/checkout@v4
-  - uses: louisescher/crabd@v1
+  - uses: louisescher/crabd@v0
     with:
       model: anthropic/claude-sonnet-4-6
 ```
@@ -56,7 +56,7 @@ Hold the key yourself. Good for a single org that doesn't want to depend on a br
 pass its credentials:
 
 ```yaml title="workflow"
-- uses: louisescher/crabd@v1
+- uses: louisescher/crabd@v0
   with:
     app-id: ${{ secrets.CRABD_APP_ID }}
     app-private-key: ${{ secrets.CRABD_APP_PRIVATE_KEY }}

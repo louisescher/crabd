@@ -41,6 +41,8 @@ describe('resolveConfig — defaults', () => {
     expect(r.triggerPhrase).toBe('/crabd');
     expect(r.thinkingLevel).toBe('medium');
     expect(r.providers.allowlist).toEqual([]);
+    expect(r.review.commentOnly).toBe(false);
+    expect(r.webSearch).toEqual({ enabled: true, maxResults: 5 });
     expect(r.limits.maxTurns).toBe(40);
     expect(r.modes.mention?.enabled).toBe(true);
     expect(r.modes.mention?.tools).toEqual(['comment', 'commit']);

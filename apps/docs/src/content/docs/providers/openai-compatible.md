@@ -23,7 +23,7 @@ model: my-llm/some-model
 ```
 
 ```yaml title="workflow"
-- uses: louisescher/crabd@v1
+- uses: louisescher/crabd@v0
   env:
     MY_LLM_KEY: ${{ secrets.MY_LLM_KEY }}
 ```

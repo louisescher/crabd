@@ -18,7 +18,7 @@ providers:
 ```
 
 ```yaml title="workflow"
-- uses: louisescher/crabd@v1
+- uses: louisescher/crabd@v0
   with:
     model: openai/gpt-5.5
   env:
