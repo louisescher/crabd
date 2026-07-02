@@ -24,7 +24,12 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # The code packages only — docs (astro check) is intentionally excluded.
+      # Consumers resolve @crabd/config and @crabd/core to their built dist/*.d.ts,
+      # so the libraries must be built before typecheck/test. (action/broker don't
+      # need pre-building; docs is excluded entirely.)
+      - name: Build libraries
+        run: pnpm --filter @crabd/config --filter @crabd/core run build
+
       - name: Typecheck
         run: >-
           pnpm --filter @crabd/config --filter @crabd/core
