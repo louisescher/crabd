@@ -14,12 +14,9 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @crabd/config --filter @crabd/core --filter @crabd/action build
-      - name: Run crab'd
-        run: node packages/action/dist/cli.mjs
+      - uses: ./
+        with:
+          model: anthropic/claude-sonnet-5
+          providers: anthropic
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
