@@ -65,6 +65,7 @@ export {
   TRACKING_MARKER,
   type ResultRender,
 } from './report/tracking.ts';
+export { collectSecrets, redactSecrets } from './report/redact.ts';
 
 // Run orchestration
 export { prepareRun, type PrepareInput, type PrepareOutcome, type RunPlan } from './run/prepare.ts';

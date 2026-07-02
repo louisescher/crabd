@@ -1,6 +1,7 @@
 import type { ResolvedConfig } from '@crabd/config';
 import type { ForgeAdapter, ForgeContext, ForgeEvent } from '../forge/types.ts';
 import { getMode, type FinalizeResult } from '../modes/registry.ts';
+import { collectSecrets, redactSecrets } from '../report/redact.ts';
 import { renderError, renderResult } from '../report/tracking.ts';
 import type { TriggerResult } from '../trigger/detect.ts';
 import type { RunPlan } from './prepare.ts';
@@ -30,9 +31,11 @@ export async function finalizeRun(input: FinalizeInput): Promise<FinalizeResult>
 
   try {
     const result = await mode.finalize({ adapter, config, event, context, trigger, data, cwd });
+    // Scrub any secrets the model may have echoed before posting to a public comment.
+    const summary = redactSecrets(result.summary, collectSecrets());
     await adapter.updateTrackingComment(
       plan.tracking,
-      renderResult({ mode: plan.mode, summary: result.summary, prUrl: result.prUrl }),
+      renderResult({ mode: plan.mode, summary, prUrl: result.prUrl }),
     );
     return result;
   } catch (error) {
