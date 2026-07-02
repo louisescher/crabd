@@ -16,5 +16,5 @@ For more information, read the [documentation](https://crabd.lou.gg).
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-crab'd ships as a **Docker action** (`ghcr.io/louisescher/crabd`).
+crab'd ships as a **Docker action** (`ghcr.io/louisescher/crabd`). See
 `workflows/github/crabd.yml` and `workflows/forgejo/crabd.yml` for full examples.
