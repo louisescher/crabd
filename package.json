@@ -13,6 +13,8 @@
     "dev:docs": "pnpm --filter @crabd/docs dev",
     "build:docs": "pnpm --filter @crabd/docs build",
     "start:docs": "pnpm --filter @crabd/docs start",
+    "build:broker": "pnpm --filter @crabd/broker build",
+    "start:broker": "pnpm --filter @crabd/broker start",
     "typecheck": "pnpm -r typecheck"
   },
   "devDependencies": {

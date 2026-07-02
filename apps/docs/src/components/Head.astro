@@ -1,0 +1,9 @@
+---
+// Extends Starlight's default <Head> to inject the self-hosted Fraunces font
+// (configured under `fonts` in astro.config.mjs, served locally — no Google Fonts).
+import Default from '@astrojs/starlight/components/Head.astro';
+import { Font } from 'astro:assets';
+---
+
+<Default {...Astro.props}><slot /></Default>
+<Font cssVariable="--font-fraunces" preload />

@@ -1,6 +1,21 @@
 :root {
   --crabd-hue: 48;
   --sl-hue-accent: var(--crabd-hue) !important;
+  /* Modern serif for headings — self-hosted via Astro's font system (--font-fraunces). */
+  --crabd-serif: var(--font-fraunces, Georgia, 'Times New Roman', serif);
+}
+
+/*
+ * Headings use the serif: content headings, the page title, and the splash hero title.
+ * Optical sizing gives Fraunces its modern, high-contrast look at large sizes.
+ */
+.sl-markdown-content :is(h1, h2, h3, h4, h5, h6),
+.content-panel h1,
+.hero h1 {
+  font-family: var(--crabd-serif);
+  font-optical-sizing: auto;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 /* Dark theme (Starlight default). */

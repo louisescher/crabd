@@ -1,5 +1,5 @@
 // @ts-check
-import { defineConfig } from 'astro/config';
+import { defineConfig, fontProviders } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import rapide from 'starlight-theme-rapide';
 import llmsTxt from 'starlight-llms-txt';
@@ -10,12 +10,29 @@ import node from '@astrojs/node';
 export default defineConfig({
   site: 'https://crabd.lou.gg',
 
+  // Self-hosted fonts via Astro's font system (Fontsource provider — no Google Fonts).
+  fonts: [
+    {
+      provider: fontProviders.fontsource(),
+      name: 'Fraunces',
+      cssVariable: '--font-fraunces',
+      weights: [400, 600, 700],
+      styles: ['normal'],
+      subsets: ['latin'],
+      fallbacks: ['Georgia', 'Times New Roman', 'serif'],
+    },
+  ],
+
   integrations: [
     starlight({
       title: "crab'd",
       description:
         "A forge-agnostic, multi-provider agent for @-mentions, PR reviews, and issue implementation on GitHub and Forgejo.",
       favicon: '/favicon.png',
+      components: {
+        // Injects the self-hosted Fraunces <Font> into <head>.
+        Head: './src/components/Head.astro',
+      },
       plugins: [
         rapide(),
         llmsTxt({
