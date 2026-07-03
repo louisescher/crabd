@@ -25,5 +25,5 @@ jobs:
           providers: anthropic
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          CRABD_FORGEJO_API_URL: ${{ env.GITHUB_SERVER_URL }}/api/v1
+          CRABD_FORGEJO_API_URL: ${{ github.server_url }}/api/v1
           CRABD_FORGEJO_TOKEN: ${{ secrets.CRABD_FORGEJO_TOKEN }}
