@@ -79,6 +79,22 @@ export const WebSearchPartialSchema = v.object({
 });
 export type WebSearchPartial = v.InferOutput<typeof WebSearchPartialSchema>;
 
+export const ContextPartialSchema = v.object({
+  /**
+   * Load the repo's own agent instructions (`AGENTS.md`, then `CLAUDE.md`) from the
+   * checkout root and append them to the system prompt, so crab'd follows the same
+   * project conventions your local agents do.
+   */
+  instruction_files: v.optional(v.boolean()),
+  /**
+   * Discover skills under `.agents/skills/` and `.claude/skills/` and list each skill's
+   * name + description in the prompt. The agent reads a skill's `SKILL.md` itself (with
+   * its file tools) when a task matches — progressive disclosure, no skill body preloaded.
+   */
+  skills: v.optional(v.boolean()),
+});
+export type ContextPartial = v.InferOutput<typeof ContextPartialSchema>;
+
 export const ReviewPartialSchema = v.object({
   /**
    * When true, crab'd posts every review as a plain COMMENT — it never formally
@@ -177,6 +193,7 @@ export const CrabdConfigPartialSchema = v.object({
   permissions: v.optional(PermissionsPartialSchema),
   review: v.optional(ReviewPartialSchema),
   web_search: v.optional(WebSearchPartialSchema),
+  context: v.optional(ContextPartialSchema),
   prompt: v.optional(PromptPartialSchema),
   limits: v.optional(LimitsPartialSchema),
   rate_limit: v.optional(RateLimitPartialSchema),
@@ -207,6 +224,12 @@ export const DEFAULT_CONFIG: CrabdConfigPartial = {
   web_search: {
     enabled: true,
     max_results: 5,
+  },
+  context: {
+    // On by default: the repo's own AGENTS.md/CLAUDE.md and skills are exactly the
+    // conventions a human's agent would follow, so crab'd honors them too.
+    instruction_files: true,
+    skills: true,
   },
   prompt: {
     instructions: '',
