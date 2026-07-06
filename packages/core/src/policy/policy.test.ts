@@ -50,4 +50,26 @@ describe('checkProviderAllowlist', () => {
     expect(r.ok).toBe(false);
     expect(r.violations[0]).toMatch(/openai/);
   });
+
+  it('flags a rate-limit fallback model whose provider is not allowlisted (egress guard)', () => {
+    const config = resolveConfig({
+      layers: {
+        org: { model: 'anthropic/claude-sonnet-4-6', providers: { allowlist: ['anthropic'] } },
+        repo: { rate_limit: { fallback_models: ['anthropic/claude-haiku-4-5', 'openai/gpt-5.5'] } },
+      },
+    });
+    const r = checkProviderAllowlist(config);
+    expect(r.ok).toBe(false);
+    expect(r.violations.some((v) => v.includes('rate_limit fallback') && v.includes('openai'))).toBe(true);
+  });
+
+  it('passes when fallback models use allowlisted providers', () => {
+    const config = resolveConfig({
+      layers: {
+        org: { model: 'anthropic/claude-sonnet-4-6', providers: { allowlist: ['anthropic', 'openai'] } },
+        repo: { rate_limit: { fallback_models: ['anthropic/claude-haiku-4-5', 'openai/gpt-5.5'] } },
+      },
+    });
+    expect(checkProviderAllowlist(config).ok).toBe(true);
+  });
 });

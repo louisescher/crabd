@@ -21,6 +21,7 @@ default. For how these values combine across the org repo, the repo file, CI inp
 | `web_search` | `object` | — | Web research tools for the agent. See below. |
 | `prompt` | `object` | — | Prompt customization. See below. |
 | `limits` | `object` | — | Run limits. See below. |
+| `rate_limit` | `object` | — | Backoff, retry, and fallback-model behavior when a provider rate-limits crab'd. See below. |
 | `modes` | `map<string, Mode>` | built-ins enabled | Per-mode configuration. See below. |
 | `mcp` | `McpServer[]` | `[]` | Remote MCP servers whose tools the agent may call. **Reconciled by `name`** across layers. See below. |
 | `governance` | `object` | — | **Org config repo only.** Locking and override allowlist. See below. |
@@ -90,6 +91,34 @@ falls back to a best-effort keyless DuckDuckGo search otherwise. `fetch_url` nee
 | --- | --- | --- | --- |
 | `max_turns` | `number` | `40` | **Hard ceiling** on tool-calling turns — the run is aborted if it's exceeded. Not injected into the prompt, so it doesn't bias the model into finishing early. |
 | `timeout_minutes` | `number` | — | **Hard** wall-clock limit, enforced via the agent's durability timeout. |
+
+## `rate_limit`
+
+Controls what crab'd does when a provider rate-limits or overloads a model. See
+[Rate limiting & fallback models](/reference/rate-limiting/) for the full picture, including why
+crab'd's main lever is falling back to a **different** model.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `fallback_models` | `string[]` | `[]` | Ordered fallback chain (`<provider>/<model>`), tried in order after the primary is rate-limited. Cross-provider. Empty = no fallback. **Replaced (not merged)** by the highest layer. Each entry's provider must be **allowlisted** (like `model`) — a non-allowlisted fallback fails the run at startup. |
+| `max_retries` | `number` | `4` | Cap on crab'd-level attempts across the chain (primary + fallbacks). |
+| `max_wait_seconds` | `number` | `180` | Total wall-clock budget crab'd spends handling rate limits before giving up. Caps CI minutes burned waiting. |
+| `trigger_scope` | `'transient' \| 'rate-limit' \| 'all'` | `transient` | Which errors trigger retry/fallback. `transient` = rate limits, 5xx/network/timeout, and quota/billing (cross-provider fallback only). `rate-limit` = only 429 / 529 / "rate limit" / "overloaded". `all` = any error. |
+| `on_exhausted` | `'soft' \| 'fail'` | per-mode | What to do once the chain/budget is exhausted. Unset = per-mode default: **`review` soft-finishes** (green check, won't block PRs), other modes **fail** the check. Set explicitly to force one behavior. |
+| `backoff` | `object` | — | Backoff between attempts / model switches. See below. |
+
+### `rate_limit.backoff`
+
+Delays are **computed** — crab'd cannot honor a provider's `retry-after` header (the underlying
+framework doesn't expose it) — and they stack on top of the framework's own per-model retries.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `strategy` | `'exponential' \| 'linear' \| 'constant'` | `exponential` | How the delay grows per attempt. |
+| `initial_delay_seconds` | `number` | `2` | Base delay for the first backoff. |
+| `max_delay_seconds` | `number` | `30` | Upper clamp on any single delay. |
+| `multiplier` | `number` | `2` | Growth factor (exponential base / linear step). |
+| `jitter` | `boolean` | `true` | Equal jitter (keeps 0.5×–1× of the delay) to avoid a thundering herd. |
 
 ## `modes.<name>`
 

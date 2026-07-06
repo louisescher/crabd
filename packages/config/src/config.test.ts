@@ -144,6 +144,60 @@ describe('resolveConfig — custom providers', () => {
   });
 });
 
+describe('resolveConfig — rate_limit', () => {
+  it('fills rate_limit from built-in defaults', () => {
+    const r = resolveConfig({ layers: {} });
+    expect(r.rateLimit.fallbackModels).toEqual([]);
+    expect(r.rateLimit.maxRetries).toBe(4);
+    expect(r.rateLimit.maxWaitSeconds).toBe(180);
+    expect(r.rateLimit.triggerScope).toBe('transient');
+    expect(r.rateLimit.onExhausted).toBeUndefined();
+    expect(r.rateLimit.backoff).toEqual({
+      strategy: 'exponential',
+      initialDelaySeconds: 2,
+      maxDelaySeconds: 30,
+      multiplier: 2,
+      jitter: true,
+    });
+  });
+
+  it('scalars: highest layer wins; backoff scalars merge per-leaf', () => {
+    const r = resolveConfig({
+      layers: {
+        org: { rate_limit: { max_wait_seconds: 90, backoff: { strategy: 'linear', multiplier: 3 } } },
+        repo: { rate_limit: { max_wait_seconds: 240, on_exhausted: 'fail' } },
+      },
+    });
+    expect(r.rateLimit.maxWaitSeconds).toBe(240);
+    expect(r.rateLimit.onExhausted).toBe('fail');
+    // org's backoff.strategy survives; other leaves fall back to defaults.
+    expect(r.rateLimit.backoff.strategy).toBe('linear');
+    expect(r.rateLimit.backoff.multiplier).toBe(3);
+    expect(r.rateLimit.backoff.initialDelaySeconds).toBe(2);
+  });
+
+  it('fallback_models is a value-list replaced by the highest layer', () => {
+    const r = resolveConfig({
+      layers: {
+        org: { rate_limit: { fallback_models: ['anthropic/claude-haiku-4-5'] } },
+        repo: { rate_limit: { fallback_models: ['openai/gpt-x', 'google/gemini-y'] } },
+      },
+    });
+    expect(r.rateLimit.fallbackModels).toEqual(['openai/gpt-x', 'google/gemini-y']);
+  });
+
+  it('org can lock a rate_limit path against lower layers', () => {
+    const org: CrabdConfigPartial = {
+      rate_limit: { fallback_models: ['anthropic/claude-haiku-4-5'] },
+      governance: { locked: ['rate_limit.fallback_models'] },
+    };
+    const r = resolveConfig({
+      layers: { org, repo: { rate_limit: { fallback_models: ['openai/gpt-x'] } } },
+    });
+    expect(r.rateLimit.fallbackModels).toEqual(['anthropic/claude-haiku-4-5']);
+  });
+});
+
 describe('resolveConfig — mcp reconciliation', () => {
   it('merges mcp servers by name across layers', () => {
     const r = resolveConfig({

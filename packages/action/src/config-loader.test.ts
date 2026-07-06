@@ -60,4 +60,14 @@ describe('loadResolvedConfig', () => {
     expect(config.model).toBe('anthropic/claude-sonnet-5');
     expect(config.providers.allowlist).toEqual([]);
   });
+
+  it('maps the fallback-models input into the rate_limit fallback chain', async () => {
+    const { config } = await loadResolvedConfig({
+      adapter: adapterWithOrgConfig(undefined),
+      event,
+      cwd: '/nonexistent-repo-dir',
+      env: { CRABD_INPUT_FALLBACK_MODELS: 'anthropic/claude-haiku-4-5, openai/gpt-x' },
+    });
+    expect(config.rateLimit.fallbackModels).toEqual(['anthropic/claude-haiku-4-5', 'openai/gpt-x']);
+  });
 });

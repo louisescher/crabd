@@ -13,16 +13,19 @@ import {
   ForgejoForge,
   GitHubForge,
   StaticTokenAuth,
+  buildAttemptChain,
   getMode,
   registerBuiltinModes,
   registerMode,
   renderProgress,
+  renderRateLimited,
+  runWithFallback,
   type ForgeAdapter,
   type ForgeRepo,
   type ModeDefinition,
   type TrackingComment,
 } from '@crabd/core';
-import { loadCrabdExtension } from '@crabd/config';
+import { loadCrabdExtension, providerOf, type ResolvedRateLimit } from '@crabd/config';
 import { webSearchTools } from '../tools/websearch.ts';
 
 registerBuiltinModes();
@@ -86,8 +89,10 @@ function progressTarget(): { adapter: ForgeAdapter; tracking: TrackingComment } 
 }
 
 /** A tool the agent calls to post progress to the tracking comment mid-run. */
-function progressTool(mode: string): ToolDefinition | undefined {
-  const target = progressTarget();
+function progressTool(
+  mode: string,
+  target: { adapter: ForgeAdapter; tracking: TrackingComment } | undefined,
+): ToolDefinition | undefined {
   if (!target) return undefined;
   return defineTool({
     name: 'report_progress',
@@ -150,6 +155,30 @@ async function fetchImages(urls: string[]): Promise<{ type: 'image'; data: strin
   return images;
 }
 
+/** Parse the resolved rate-limit config the CLI passes as `CRABD_RATE_LIMIT` (camelCase JSON). */
+function rateLimitConfig(): ResolvedRateLimit {
+  const fallback: ResolvedRateLimit = {
+    fallbackModels: [],
+    maxRetries: 4,
+    maxWaitSeconds: 180,
+    triggerScope: 'transient',
+    backoff: { strategy: 'exponential', initialDelaySeconds: 2, maxDelaySeconds: 30, multiplier: 2, jitter: true },
+  };
+  const raw = process.env.CRABD_RATE_LIMIT;
+  if (!raw) return fallback;
+  try {
+    const parsed = JSON.parse(raw) as Partial<ResolvedRateLimit>;
+    return {
+      ...fallback,
+      ...parsed,
+      fallbackModels: Array.isArray(parsed.fallbackModels) ? parsed.fallbackModels : [],
+      backoff: { ...fallback.backoff, ...(parsed.backoff ?? {}) },
+    };
+  } catch {
+    return fallback;
+  }
+}
+
 /** Web-search / fetch tools, unless disabled via config (passed as CRABD_WEB_SEARCH). */
 function configuredWebSearchTools(): ToolDefinition[] {
   const raw = process.env.CRABD_WEB_SEARCH;
@@ -177,37 +206,112 @@ export default defineWorkflow({
     const mode = getMode(input.mode);
     if (!mode) throw new Error(`crabd: no mode registered for "${input.mode}"`);
 
+    const target = progressTarget();
     const [connected, images] = await Promise.all([mcpTools(), fetchImages(input.images ?? [])]);
-    const progress = progressTool(input.mode);
+    const progress = progressTool(input.mode, target);
     const tools = [...(progress ? [progress] : []), ...connected, ...configuredWebSearchTools()];
 
-    const session = await harness.session();
-    const handle = session.prompt(input.message, {
+    const promptOptions = {
       result: mode.outputSchema,
       ...(tools.length > 0 ? { tools } : {}),
       ...(images.length > 0 ? { images } : {}),
+    };
+
+    // Rate-limit handling: walk the model chain (primary → fallbacks) once, applying
+    // computed backoff between switches, bounded by a total wall-clock budget. The
+    // framework already retries the *same* model internally before we ever see the
+    // error, so crab'd's job here is to fall back to a *different* model, reflect the
+    // state in the comment, and hand a clean exhaustion signal back to the CLI.
+    const rl = rateLimitConfig();
+    const primaryModel = process.env.CRABD_MODEL ?? 'anthropic/claude-sonnet-4-6';
+    const chain = buildAttemptChain(primaryModel, rl.fallbackModels, rl.maxRetries);
+    const maxWaitMs = Math.max(0, rl.maxWaitSeconds) * 1000;
+    const maxTurns = process.env.CRABD_MAX_TURNS ? Number(process.env.CRABD_MAX_TURNS) : undefined;
+
+    // Best-effort, throttled tracking-comment update while a model is being rate-limited.
+    let lastRlUpdate = 0;
+    const postRateLimited = (render: Parameters<typeof renderRateLimited>[0], force = false): void => {
+      if (!target) return;
+      const now = Date.now();
+      if (!force && now - lastRlUpdate < 1500) return;
+      lastRlUpdate = now;
+      target.adapter.updateTrackingComment(target.tracking, renderRateLimited(render)).catch(() => {});
+    };
+
+    // One observer for the whole run: the hard max_turns ceiling (reset per attempt)
+    // plus surfacing the framework's own same-model retries into the tracking comment.
+    let toolStarts = 0;
+    let currentModel = primaryModel;
+    let currentHandle: { abort: (reason?: unknown) => void } | undefined;
+    let abortedForMaxTurns = false;
+    const unsubscribe = observe((event) => {
+      if (event.type === 'tool_start') {
+        toolStarts += 1;
+        if (maxTurns && Number.isFinite(maxTurns) && toolStarts > maxTurns && currentHandle) {
+          abortedForMaxTurns = true;
+          currentHandle.abort(new Error(`crabd: max_turns (${maxTurns}) exceeded`));
+        }
+        return;
+      }
+      const e = event as unknown as { type: string; message?: string };
+      if (e.type === 'log' && typeof e.message === 'string' && e.message.includes('flue:model-retry')) {
+        postRateLimited({ mode: input.mode, provider: providerOf(currentModel), switching: false });
+      }
     });
 
-    // Hard max_turns ceiling: count tool-call starts and abort once exceeded.
-    const maxTurns = process.env.CRABD_MAX_TURNS ? Number(process.env.CRABD_MAX_TURNS) : undefined;
-    let unsubscribe: () => void = () => {};
-    if (maxTurns && Number.isFinite(maxTurns)) {
-      let toolStarts = 0;
-      unsubscribe = observe((event) => {
-        if (event.type === 'tool_start') {
-          toolStarts += 1;
-          if (toolStarts > maxTurns) {
-            handle.abort(new Error(`crabd: max_turns (${maxTurns}) exceeded`));
-          }
-        }
-      });
-    }
+    // One attempt = one full model call (which itself includes the framework's
+    // same-model retries). Fallback attempts use a fresh session so a failed turn
+    // isn't carried into the retry's context.
+    const runOnce = async (model: string, index: number): Promise<{ data: JsonValue; model?: string }> => {
+      currentModel = model;
+      toolStarts = 0;
+      abortedForMaxTurns = false;
+      const session = index === 0 ? await harness.session() : await harness.session(`crabd-fallback-${index}`);
+      const handle = session.prompt(input.message, { ...promptOptions, model });
+      currentHandle = handle;
+      return (await handle) as unknown as { data: JsonValue; model?: string };
+    };
 
+    let outcome;
     try {
-      const response = (await handle) as unknown as { data: JsonValue };
-      return response.data;
+      outcome = await runWithFallback<{ data: JsonValue; model?: string }>({
+        chain,
+        triggerScope: rl.triggerScope,
+        backoff: rl.backoff,
+        maxWaitMs,
+        runOnce,
+        // A deliberate max_turns abort must not be mistaken for a rate limit.
+        isFatal: () => abortedForMaxTurns,
+        onSwitch: ({ fromModel, nextModel, attempt, waitMs }) => {
+          postRateLimited(
+            {
+              mode: input.mode,
+              provider: providerOf(fromModel),
+              nextModel,
+              attempt,
+              waitSeconds: waitMs / 1000,
+              switching: true,
+            },
+            true,
+          );
+        },
+      });
     } finally {
       unsubscribe();
     }
+
+    if (outcome.ok) {
+      const meta: Record<string, JsonValue> = { modelUsed: outcome.result.model ?? outcome.model };
+      if (outcome.fellBack) meta.fellBackFrom = primaryModel;
+      return { ok: true, data: outcome.result.data, meta } as JsonValue;
+    }
+
+    const error: Record<string, JsonValue> = {
+      kind: 'rate_limited',
+      message: outcome.lastError,
+      attempts: outcome.attempts,
+    };
+    if (outcome.lastModel) error.lastModel = outcome.lastModel;
+    return { ok: false, error } as JsonValue;
   },
 });

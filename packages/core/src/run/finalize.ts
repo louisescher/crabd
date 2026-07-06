@@ -16,6 +16,8 @@ export interface FinalizeInput {
   data: unknown;
   /** Working directory of the checked-out repo. */
   cwd: string;
+  /** Optional disclosure appended to the result comment (e.g. a fallback model was used). */
+  note?: string;
 }
 
 /**
@@ -24,7 +26,7 @@ export interface FinalizeInput {
  * with the error before rethrowing.
  */
 export async function finalizeRun(input: FinalizeInput): Promise<FinalizeResult> {
-  const { adapter, config, event, context, trigger, plan, data, cwd } = input;
+  const { adapter, config, event, context, trigger, plan, data, cwd, note } = input;
   const mode = getMode(plan.mode);
   if (!mode) throw new Error(`crabd: no mode registered for "${plan.mode}"`);
 
@@ -33,7 +35,12 @@ export async function finalizeRun(input: FinalizeInput): Promise<FinalizeResult>
     await adapter.updateTrackingComment(
       plan.tracking,
       // Use the mode's short tracking text when it posted its detail elsewhere (e.g. a PR review).
-      renderResult({ mode: plan.mode, summary: result.trackingComment ?? result.summary, prUrl: result.prUrl }),
+      renderResult({
+        mode: plan.mode,
+        summary: result.trackingComment ?? result.summary,
+        prUrl: result.prUrl,
+        ...(note ? { note } : {}),
+      }),
     );
     return result;
   } catch (error) {

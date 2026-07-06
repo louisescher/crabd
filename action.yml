@@ -18,6 +18,9 @@ inputs:
   thinking-level:
     description: "Reasoning effort: off|minimal|low|medium|high|xhigh."
     required: false
+  fallback-models:
+    description: "Comma-separated ordered fallback model chain (<provider>/<model>), tried when the primary is rate-limited."
+    required: false
   github-token:
     description: "Token for forge operations. Falls back to GITHUB_TOKEN (github-actions identity)."
     required: false
@@ -56,6 +59,7 @@ runs:
     CRABD_INPUT_TRIGGER_PHRASE: ${{ inputs.trigger-phrase }}
     CRABD_INPUT_PROVIDERS: ${{ inputs.providers }}
     CRABD_INPUT_THINKING_LEVEL: ${{ inputs.thinking-level }}
+    CRABD_INPUT_FALLBACK_MODELS: ${{ inputs.fallback-models }}
     CRABD_GITHUB_TOKEN: ${{ inputs.github-token }}
     CRABD_BROKER_URL: ${{ inputs.broker-url }}
     CRABD_APP_ID: ${{ inputs.app-id }}

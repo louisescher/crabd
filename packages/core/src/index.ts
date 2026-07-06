@@ -56,13 +56,31 @@ export { commitWorkingChanges, subjectNumber } from './modes/shared.ts';
 // Git
 export { collectChanges, hasChanges } from './git/changes.ts';
 
+// Rate limiting
+export {
+  buildAttemptChain,
+  classifyModelError,
+  computeBackoffDelayMs,
+  isInFallbackScope,
+  runWithFallback,
+  type ModelErrorClass,
+  type RunExhausted,
+  type RunOutcome,
+  type RunSuccess,
+  type RunWithFallbackOptions,
+} from './rate-limit/index.ts';
+
 // Report
 export {
   renderError,
   renderProgress,
+  renderRateLimited,
+  renderRateLimitExhausted,
   renderResult,
   renderWorking,
   TRACKING_MARKER,
+  type RateLimitedRender,
+  type RateLimitExhaustedRender,
   type ResultRender,
 } from './report/tracking.ts';
 

@@ -40,6 +40,7 @@ variables for you. Set the rest via the workflow's `env:` (secrets for anything 
 | `CRABD_INPUT_TRIGGER_PHRASE` | Trigger phrase (inputs layer). |
 | `CRABD_INPUT_PROVIDERS` | Comma-separated provider allowlist (inputs layer). |
 | `CRABD_INPUT_THINKING_LEVEL` | Reasoning level (inputs layer). |
+| `CRABD_INPUT_FALLBACK_MODELS` | Comma-separated fallback model chain → `rate_limit.fallback_models` (inputs layer). |
 | `CRABD_CONFIG_ENV` | A YAML blob applied as the highest **env** config layer. |
 | `CRABD_CONFIG_PATH` | Repo config filename. Default `.crabd.yml`. |
 | `CRABD_ORG_CONFIG_REPO` | Org config repo slug. Default `<owner>/.crabd-config`. |
@@ -108,6 +109,7 @@ non-Actions embedding.
 | `CRABD_GATEWAY_URL` / `CRABD_GATEWAY_PROVIDERS` | Gateway base URL and the built-in providers to route through it (from `providers.gateway_url`). |
 | `CRABD_MCP` | JSON of MCP servers to connect. |
 | `CRABD_WEB_SEARCH` | JSON of the resolved web-search config (`enabled`, `maxResults`). |
+| `CRABD_RATE_LIMIT` | JSON of the resolved [`rate_limit`](/reference/config-yaml/#rate_limit) config (fallback chain, backoff, wait budget, trigger scope) used by the turn's retry/fallback loop. |
 | `CRABD_EXTENSION_PATH` | Absolute path to `crabd.config.ts`. |
 | `CRABD_SANDBOX_ENV` | JSON of extra env vars exposed to the sandbox (empty by default). |
 | `CRABD_FORGE_TOKEN`, `CRABD_REPO_OWNER`, `CRABD_REPO_NAME`, `CRABD_REPO_DEFAULT_BRANCH`, `CRABD_TRACKING_ID`, `CRABD_SUBJECT` | Wiring for the live-progress tool. |
