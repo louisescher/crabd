@@ -35,7 +35,7 @@ export async function finalizeRun(input: FinalizeInput): Promise<FinalizeResult>
     await adapter.updateTrackingComment(
       plan.tracking,
       // Use the mode's short tracking text when it posted its detail elsewhere (e.g. a PR review).
-      renderResult({
+      renderResult(plan.branding, {
         mode: plan.mode,
         summary: result.trackingComment ?? result.summary,
         prUrl: result.prUrl,
@@ -45,7 +45,7 @@ export async function finalizeRun(input: FinalizeInput): Promise<FinalizeResult>
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await adapter.updateTrackingComment(plan.tracking, renderError(plan.mode, message));
+    await adapter.updateTrackingComment(plan.tracking, renderError(plan.branding, plan.mode, message));
     throw error;
   }
 }
@@ -56,5 +56,5 @@ export async function reportRunError(
   plan: RunPlan,
   message: string,
 ): Promise<void> {
-  await adapter.updateTrackingComment(plan.tracking, renderError(plan.mode, message));
+  await adapter.updateTrackingComment(plan.tracking, renderError(plan.branding, plan.mode, message));
 }

@@ -79,6 +79,23 @@ export const WebSearchPartialSchema = v.object({
 });
 export type WebSearchPartial = v.InferOutput<typeof WebSearchPartialSchema>;
 
+export const AppearancePartialSchema = v.object({
+  /** Display name crab'd uses when it refers to itself in tracking comments (default `crab'd`). */
+  name: v.optional(v.string()),
+  /**
+   * Emoji prefixed to crab'd's tracking comments (default `🦀`). Set to `''` to show no
+   * emoji. Only this brand emoji is governed — status glyphs (⚠️/⏳/➡️) are left as-is.
+   */
+  emoji: v.optional(v.string()),
+  /**
+   * Whether to append the `posted by <name>` footer (default `true`). When `false`, the
+   * visible footer is dropped (along with the crab'd attribution link); the hidden marker
+   * that lets crab'd reuse its comment across runs is always kept.
+   */
+  footer: v.optional(v.boolean()),
+});
+export type AppearancePartial = v.InferOutput<typeof AppearancePartialSchema>;
+
 export const ReviewPartialSchema = v.object({
   /**
    * When true, crab'd posts every review as a plain COMMENT — it never formally
@@ -175,6 +192,7 @@ export const CrabdConfigPartialSchema = v.object({
   thinking_level: v.optional(ThinkingLevelSchema),
   providers: v.optional(ProvidersPartialSchema),
   permissions: v.optional(PermissionsPartialSchema),
+  appearance: v.optional(AppearancePartialSchema),
   review: v.optional(ReviewPartialSchema),
   web_search: v.optional(WebSearchPartialSchema),
   prompt: v.optional(PromptPartialSchema),
@@ -200,6 +218,11 @@ export const DEFAULT_CONFIG: CrabdConfigPartial = {
   },
   permissions: {
     allowed_associations: ['OWNER', 'MEMBER', 'COLLABORATOR'],
+  },
+  appearance: {
+    name: "crab'd",
+    emoji: '🦀',
+    footer: true,
   },
   review: {
     comment_only: false,

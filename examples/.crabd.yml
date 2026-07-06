@@ -11,6 +11,13 @@ providers:
 permissions:
   allowed_associations: [OWNER, MEMBER, COLLABORATOR]
 
+# How crab'd presents itself in comments. Defaults shown; set emoji: "" to remove
+# the crab, footer: false to drop the "posted by" line.
+appearance:
+  name: "crab'd"
+  emoji: "🦀"
+  footer: true
+
 prompt:
   instructions: |
     - Match the existing code style and conventions.

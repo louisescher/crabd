@@ -1,4 +1,5 @@
 export {
+  AppearancePartialSchema,
   BackoffPartialSchema,
   BackoffStrategySchema,
   BACKOFF_STRATEGIES,
@@ -15,6 +16,7 @@ export {
   ThinkingLevelSchema,
   THINKING_LEVELS,
   parseConfigObject,
+  type AppearancePartial,
   type BackoffPartial,
   type BackoffStrategy,
   type CrabdConfigPartial,

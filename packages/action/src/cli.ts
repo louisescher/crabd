@@ -180,6 +180,8 @@ async function main(): Promise<number> {
   }
   if (config.mcp.length > 0) process.env.CRABD_MCP = JSON.stringify(config.mcp);
   process.env.CRABD_WEB_SEARCH = JSON.stringify(config.webSearch);
+  // Branding for the comments the turn subprocess posts (progress + rate-limit updates).
+  process.env.CRABD_BRANDING = JSON.stringify(config.appearance);
   // Rate-limit dials (backoff, fallback chain, wait budget). The turn subprocess
   // does the retry/fallback; on_exhausted is applied here (it needs the mode).
   process.env.CRABD_RATE_LIMIT = JSON.stringify(config.rateLimit);
@@ -220,7 +222,7 @@ async function main(): Promise<number> {
     log(`rate-limited: exhausted after ${turn.error.attempts} attempt(s); ${soft ? 'soft-finishing' : 'failing check'}`);
     await adapter.updateTrackingComment(
       plan.tracking,
-      renderRateLimitExhausted({
+      renderRateLimitExhausted(plan.branding, {
         mode: plan.mode,
         attempts: turn.error.attempts,
         ...(turn.error.lastModel ? { lastModel: turn.error.lastModel } : {}),

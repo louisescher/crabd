@@ -41,6 +41,8 @@ export interface ResolvedConfig {
   thinkingLevel: ThinkingLevel;
   providers: { allowlist: string[]; gatewayUrl: string | null; custom: ResolvedCustomProvider[] };
   permissions: { allowedAssociations: string[] };
+  /** How crab'd presents itself in tracking comments. */
+  appearance: { name: string; emoji: string; footer: boolean };
   review: { commentOnly: boolean };
   webSearch: { enabled: boolean; maxResults: number };
   prompt: {
@@ -214,6 +216,12 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
     'permissions.allowed_associations',
   );
 
+  // Appearance: name falls back to the default if blank (avoids a degenerate `****`);
+  // emoji keeps '' as an explicit "no emoji" choice, so only `?? default` for the unset case.
+  const appearanceName = (pickScalar('appearance.name', (c) => c.appearance?.name, layers, locked) ?? "crab'd").trim() || "crab'd";
+  const appearanceEmoji = (pickScalar('appearance.emoji', (c) => c.appearance?.emoji, layers, locked) ?? '🦀').trim();
+  const appearanceFooter = pickScalar('appearance.footer', (c) => c.appearance?.footer, layers, locked) ?? true;
+
   const commentOnly = pickScalar('review.comment_only', (c) => c.review?.comment_only, layers, locked) ?? false;
   const webSearchEnabled = pickScalar('web_search.enabled', (c) => c.web_search?.enabled, layers, locked) ?? true;
   const webSearchMax = pickScalar('web_search.max_results', (c) => c.web_search?.max_results, layers, locked) ?? 5;
@@ -235,6 +243,7 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
     thinkingLevel,
     providers: { allowlist, gatewayUrl, custom },
     permissions: { allowedAssociations },
+    appearance: { name: appearanceName, emoji: appearanceEmoji, footer: appearanceFooter },
     review: { commentOnly },
     webSearch: { enabled: webSearchEnabled, maxResults: webSearchMax },
     prompt: {

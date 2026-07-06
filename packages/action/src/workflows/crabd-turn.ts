@@ -10,6 +10,7 @@ import {
 import { local } from '@flue/runtime/node';
 import * as v from 'valibot';
 import {
+  DEFAULT_BRANDING,
   ForgejoForge,
   GitHubForge,
   StaticTokenAuth,
@@ -20,6 +21,7 @@ import {
   renderProgress,
   renderRateLimited,
   runWithFallback,
+  type Branding,
   type ForgeAdapter,
   type ForgeRepo,
   type ModeDefinition,
@@ -88,8 +90,25 @@ function progressTarget(): { adapter: ForgeAdapter; tracking: TrackingComment } 
   return { adapter, tracking: { id: Number(trackingId), target: Number(subject) } };
 }
 
+/** Branding (name/emoji/footer) the CLI resolved from `config.appearance`, passed via env. */
+function brandingFromEnv(): Branding {
+  const raw = process.env.CRABD_BRANDING;
+  if (!raw) return DEFAULT_BRANDING;
+  try {
+    const parsed = JSON.parse(raw) as Partial<Branding>;
+    return {
+      name: typeof parsed.name === 'string' && parsed.name.trim() ? parsed.name : DEFAULT_BRANDING.name,
+      emoji: typeof parsed.emoji === 'string' ? parsed.emoji : DEFAULT_BRANDING.emoji,
+      footer: typeof parsed.footer === 'boolean' ? parsed.footer : DEFAULT_BRANDING.footer,
+    };
+  } catch {
+    return DEFAULT_BRANDING;
+  }
+}
+
 /** A tool the agent calls to post progress to the tracking comment mid-run. */
 function progressTool(
+  branding: Branding,
   mode: string,
   target: { adapter: ForgeAdapter; tracking: TrackingComment } | undefined,
 ): ToolDefinition | undefined {
@@ -100,7 +119,7 @@ function progressTool(
     input: v.object({ message: v.string() }),
     async run({ input }) {
       try {
-        await target.adapter.updateTrackingComment(target.tracking, renderProgress(mode, input.message));
+        await target.adapter.updateTrackingComment(target.tracking, renderProgress(branding, mode, input.message));
       } catch {
         // Progress updates are best-effort.
       }
@@ -207,8 +226,9 @@ export default defineWorkflow({
     if (!mode) throw new Error(`crabd: no mode registered for "${input.mode}"`);
 
     const target = progressTarget();
+    const brand = brandingFromEnv();
     const [connected, images] = await Promise.all([mcpTools(), fetchImages(input.images ?? [])]);
-    const progress = progressTool(input.mode, target);
+    const progress = progressTool(brand, input.mode, target);
     const tools = [...(progress ? [progress] : []), ...connected, ...configuredWebSearchTools()];
 
     const promptOptions = {
@@ -230,12 +250,12 @@ export default defineWorkflow({
 
     // Best-effort, throttled tracking-comment update while a model is being rate-limited.
     let lastRlUpdate = 0;
-    const postRateLimited = (render: Parameters<typeof renderRateLimited>[0], force = false): void => {
+    const postRateLimited = (render: Parameters<typeof renderRateLimited>[1], force = false): void => {
       if (!target) return;
       const now = Date.now();
       if (!force && now - lastRlUpdate < 1500) return;
       lastRlUpdate = now;
-      target.adapter.updateTrackingComment(target.tracking, renderRateLimited(render)).catch(() => {});
+      target.adapter.updateTrackingComment(target.tracking, renderRateLimited(brand, render)).catch(() => {});
     };
 
     // One observer for the whole run: the hard max_turns ceiling (reset per attempt)
