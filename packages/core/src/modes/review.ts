@@ -49,11 +49,13 @@ export const reviewMode: ModeDefinition<ReviewOutput> = {
     const count = ctx.data.findings.length;
     const suffix = count === 0 ? '' : ` (${count} inline finding${count === 1 ? '' : 's'})`;
     const verdictLine = `**${VERDICT_LABEL[ctx.data.verdict]}.**${suffix}`;
+    // Prefix with the configured brand emoji (empty → no emoji), matching the comment leads.
+    const emoji = ctx.config.appearance.emoji ? `${ctx.config.appearance.emoji} ` : '';
     return {
       summary: `${ctx.data.summary}\n\n${verdictLine}`,
       // The full summary is in the posted review; keep the tracking comment short so it
       // isn't duplicated. See finalizeRun.
-      trackingComment: `🦀 Reviewed this pull request — ${verdictLine}`,
+      trackingComment: `${emoji}Reviewed this pull request — ${verdictLine}`,
     };
   },
 };

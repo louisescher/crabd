@@ -11,6 +11,13 @@ providers:
 permissions:
   allowed_associations: [OWNER, MEMBER, COLLABORATOR]
 
+# How crab'd presents itself in comments. Defaults shown; set emoji: "" to remove
+# the crab, footer: false to drop the "posted by" line.
+appearance:
+  name: "crab'd"
+  emoji: "🦀"
+  footer: true
+
 # Repo-authored context crab'd folds into the prompt. Both default to true;
 # shown here to make them explicit. See https://crabd.lou.gg/project-context/
 context:

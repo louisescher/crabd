@@ -11,7 +11,7 @@ import type {
 import { registerBuiltinModes } from './builtins.ts';
 import { getMode, listModes } from './registry.ts';
 import { reviewMode } from './review.ts';
-import { renderResult, renderWorking } from '../report/tracking.ts';
+import { DEFAULT_BRANDING, renderResult, renderWorking } from '../report/tracking.ts';
 
 registerBuiltinModes();
 
@@ -117,11 +117,11 @@ describe('review mode finalize', () => {
 
 describe('tracking comment rendering', () => {
   it('renders a working comment for each mode', () => {
-    expect(renderWorking('review')).toMatch(/reviewing this pull request/);
-    expect(renderWorking('mention')).toMatch(/crab'd/);
+    expect(renderWorking(DEFAULT_BRANDING, 'review')).toMatch(/reviewing this pull request/);
+    expect(renderWorking(DEFAULT_BRANDING, 'mention')).toMatch(/crab'd/);
   });
   it('renders a result with an optional PR link', () => {
-    const body = renderResult({ mode: 'implement', summary: 'Done', prUrl: 'http://pr/2' });
+    const body = renderResult(DEFAULT_BRANDING, { mode: 'implement', summary: 'Done', prUrl: 'http://pr/2' });
     expect(body).toMatch(/Done/);
     expect(body).toMatch(/http:\/\/pr\/2/);
   });

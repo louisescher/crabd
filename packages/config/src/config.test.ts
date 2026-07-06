@@ -43,9 +43,25 @@ describe('resolveConfig — defaults', () => {
     expect(r.providers.allowlist).toEqual([]);
     expect(r.review.commentOnly).toBe(false);
     expect(r.webSearch).toEqual({ enabled: true, maxResults: 5 });
+    expect(r.appearance).toEqual({ name: "crab'd", emoji: '🦀', footer: true });
     expect(r.limits.maxTurns).toBe(40);
     expect(r.modes.mention?.enabled).toBe(true);
     expect(r.modes.mention?.tools).toEqual(['comment', 'commit']);
+  });
+});
+
+describe('resolveConfig — appearance', () => {
+  it('lets a repo override name/emoji/footer', () => {
+    const r = resolveConfig({
+      layers: { repo: { appearance: { name: 'DevBot', emoji: '🐙', footer: false } } },
+    });
+    expect(r.appearance).toEqual({ name: 'DevBot', emoji: '🐙', footer: false });
+  });
+
+  it('keeps an explicit empty emoji (removal) but falls back on a blank name', () => {
+    const r = resolveConfig({ layers: { repo: { appearance: { emoji: '', name: '   ' } } } });
+    expect(r.appearance.emoji).toBe('');
+    expect(r.appearance.name).toBe("crab'd");
   });
 });
 

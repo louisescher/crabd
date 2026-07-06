@@ -6,7 +6,7 @@ import { getMode, listModes } from '../modes/registry.ts';
 import { subjectNumber } from '../modes/shared.ts';
 import { assertProvidersAllowed } from '../policy/providers.ts';
 import { authorizeActor } from '../policy/trust.ts';
-import { renderWorking } from '../report/tracking.ts';
+import { renderWorking, type Branding } from '../report/tracking.ts';
 import { detectTrigger, type TriggerResult } from '../trigger/detect.ts';
 
 /** Everything the Flue phase needs to run one agent turn. */
@@ -24,6 +24,8 @@ export interface RunPlan {
   tracking: TrackingComment;
   /** Issue/PR number the run concerns. */
   subject: number;
+  /** Name/emoji/footer crab'd uses in comments for this run (from `config.appearance`). */
+  branding: Branding;
 }
 
 export type PrepareOutcome =
@@ -92,13 +94,14 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
   });
 
   const prompt = assemblePrompt({ mode: trigger.mode, config, context, event, trigger, project });
+  const branding = config.appearance;
 
   // Reuse an existing crab'd comment on this subject (sticky) instead of stacking new ones.
   let tracking = await adapter.findTrackingComment(subject);
   if (tracking) {
-    await adapter.updateTrackingComment(tracking, renderWorking(trigger.mode));
+    await adapter.updateTrackingComment(tracking, renderWorking(branding, trigger.mode));
   } else {
-    tracking = await adapter.createTrackingComment(subject, renderWorking(trigger.mode));
+    tracking = await adapter.createTrackingComment(subject, renderWorking(branding, trigger.mode));
   }
 
   return {
@@ -112,6 +115,7 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
       toolNames,
       tracking,
       subject,
+      branding,
     },
     context,
     trigger,

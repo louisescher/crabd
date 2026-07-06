@@ -17,6 +17,7 @@ default. For how these values combine across the org repo, the repo file, CI inp
 | `thinking_level` | `'off' \| 'minimal' \| 'low' \| 'medium' \| 'high' \| 'xhigh'` | `medium` | Reasoning effort. |
 | `providers` | `object` | — | Provider allowlist, gateway, and custom providers. See below. |
 | `permissions` | `object` | — | Who may trigger crab'd. See below. |
+| `appearance` | `object` | — | Name, emoji, and footer crab'd uses in its comments. See below. |
 | `review` | `object` | — | Review-mode behavior. See below. |
 | `web_search` | `object` | — | Web research tools for the agent. See below. |
 | `context` | `object` | — | Repo-authored context (`AGENTS.md`/`CLAUDE.md`, skills) crab'd pulls into the prompt. See below. |
@@ -49,6 +50,32 @@ default. For how these values combine across the org repo, the repo file, CI inp
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `allowed_associations` | `string[]` | `[OWNER, MEMBER, COLLABORATOR]` | Author-associations allowed to trigger crab'd. Bots are always denied. |
+
+## `appearance`
+
+Controls how crab'd presents itself in the tracking comment it posts and updates. Use it to rename
+the bot or match a house style. Only the **brand emoji** (`🦀`) is governed here — status glyphs
+(⚠️ error, ⏳ rate-limited, ➡️ PR opened) are always shown as semantic cues.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `name` | `string` | `crab'd` | Display name crab'd uses when it refers to itself (e.g. "**DevBot** is working…"). A blank value falls back to the default. |
+| `emoji` | `string` | `🦀` | Emoji prefixed to comment leads and the footer. Set to `""` (empty string) to show **no** emoji. |
+| `footer` | `boolean` | `true` | Whether the `posted by <name>` footer (with the link back to the crab'd project) is shown. Set `false` to drop it entirely. The hidden marker crab'd uses to find and update its own comment is always kept, so sticky reuse still works. |
+
+```yaml
+# Rebrand the bot and drop the footer
+appearance:
+  name: DevBot
+  emoji: "🐙"
+  footer: false
+```
+
+```yaml
+# Keep the name, remove every crab
+appearance:
+  emoji: ""
+```
 
 ## `review`
 

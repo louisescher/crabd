@@ -78,6 +78,7 @@ export {
 
 // Report
 export {
+  DEFAULT_BRANDING,
   renderError,
   renderProgress,
   renderRateLimited,
@@ -85,6 +86,7 @@ export {
   renderResult,
   renderWorking,
   TRACKING_MARKER,
+  type Branding,
   type RateLimitedRender,
   type RateLimitExhaustedRender,
   type ResultRender,
