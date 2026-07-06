@@ -20,6 +20,7 @@ default. For how these values combine across the org repo, the repo file, CI inp
 | `appearance` | `object` | — | Name, emoji, and footer crab'd uses in its comments. See below. |
 | `review` | `object` | — | Review-mode behavior. See below. |
 | `web_search` | `object` | — | Web research tools for the agent. See below. |
+| `context` | `object` | — | Repo-authored context (`AGENTS.md`/`CLAUDE.md`, skills) crab'd pulls into the prompt. See below. |
 | `prompt` | `object` | — | Prompt customization. See below. |
 | `limits` | `object` | — | Run limits. See below. |
 | `rate_limit` | `object` | — | Backoff, retry, and fallback-model behavior when a provider rate-limits crab'd. See below. |
@@ -103,6 +104,17 @@ versions, changelogs, APIs, issues) instead of relying on stale training data.
 
 Search uses [Tavily](https://tavily.com) when `TAVILY_API_KEY` is set (recommended, reliable), and
 falls back to a best-effort keyless DuckDuckGo search otherwise. `fetch_url` needs no key.
+
+## `context`
+
+Pulls the repo's **own** agent context into the prompt, so crab'd follows the same conventions your
+local agents (Claude Code and others) already do. See [Project context](/project-context/) for the
+full behavior.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `instruction_files` | `boolean` | `true` | Load `AGENTS.md`, then `CLAUDE.md`, from the checkout root and append them to the system prompt (after crab'd's base + `prompt.instructions`, so core rules stay authoritative). Both are read; identical content is included once, differing content is labeled per file. Combined text is capped at 40k chars. |
+| `skills` | `boolean` | `true` | Discover skills under `.agents/skills/` and `.claude/skills/` and list each skill's `name` + `description` in the prompt. The agent reads a skill's `SKILL.md` itself when a task matches — the body is never preloaded. A skill with no description is skipped; a skill in both roots is listed once. |
 
 ## `prompt`
 

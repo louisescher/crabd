@@ -18,6 +18,12 @@ appearance:
   emoji: "🦀"
   footer: true
 
+# Repo-authored context crab'd folds into the prompt. Both default to true;
+# shown here to make them explicit. See https://crabd.lou.gg/project-context/
+context:
+  instruction_files: true # read AGENTS.md / CLAUDE.md from the repo root
+  skills: true # discover .agents/skills/ and .claude/skills/
+
 prompt:
   instructions: |
     - Match the existing code style and conventions.

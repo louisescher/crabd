@@ -20,7 +20,9 @@ instructions.
 | --- | --- |
 | `@claude` mention | `/crabd` mention (set `trigger_phrase` to keep `@claude` if desired) |
 | model input (Claude only) | `model: <provider>/<model>` — any provider |
-| `custom_instructions` / CLAUDE.md guidance | `prompt.instructions` (global) or per-mode `modes.*.instructions` |
+| `custom_instructions` | `prompt.instructions` (global) or per-mode `modes.*.instructions` |
+| `CLAUDE.md` / `AGENTS.md` in the repo | **Loaded automatically** — crab'd reads them at run time (`context.instruction_files`, on by default). No porting needed. |
+| `.claude/skills/` (or `.agents/skills/`) | **Discovered automatically** (`context.skills`, on by default) — the agent reads a matching `SKILL.md` on demand. |
 | PR review behavior | `review` mode (fires on PR opened/reopened/ready_for_review, or `/crabd review`) |
 | implement / fix an issue | `implement` mode |
 | `mcp_config` | `mcp:` servers in `.crabd.yml` |
@@ -37,9 +39,11 @@ Start from `workflows/github/crabd.yml` in the crab'd repo.
 
 ## 4. Translate config
 
-Create `.crabd.yml`: set `model`, move custom instructions into `prompt.instructions`, port MCP
+Create `.crabd.yml`: set `model`, move `custom_instructions` into `prompt.instructions`, port MCP
 servers, and set limits. If staying on Claude, `model: anthropic/claude-sonnet-5` is the closest
-match.
+match. Leave the repo's `CLAUDE.md`/`AGENTS.md` and any `.claude/skills` in place — crab'd picks them
+up automatically (see [Project context](https://crabd.lou.gg/project-context/)), so don't copy them
+into config.
 
 ## 5. Secrets & cleanup
 

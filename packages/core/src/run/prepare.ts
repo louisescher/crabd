@@ -1,5 +1,6 @@
 import type { ResolvedConfig, ThinkingLevel } from '@crabd/config';
 import { assemblePrompt } from '../context/assemble.ts';
+import { loadProjectContext } from '../context/project.ts';
 import type { ForgeAdapter, ForgeContext, ForgeEvent, TrackingComment } from '../forge/types.ts';
 import { getMode, listModes } from '../modes/registry.ts';
 import { subjectNumber } from '../modes/shared.ts';
@@ -36,6 +37,8 @@ export interface PrepareInput {
   adapter: ForgeAdapter;
   config: ResolvedConfig;
   event: ForgeEvent;
+  /** Repo checkout root, used to read project context (AGENTS.md/CLAUDE.md, skills). */
+  cwd: string;
 }
 
 /**
@@ -44,7 +47,7 @@ export interface PrepareInput {
  * {@link RunPlan} to hand to the Flue phase, or a skip/denied outcome.
  */
 export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
-  const { adapter, config, event } = input;
+  const { adapter, config, event, cwd } = input;
 
   // Known modes are all registered ones (built-ins + custom from crabd.config.ts);
   // enabled modes are those minus any explicitly disabled in config. Passing both lets a
@@ -83,7 +86,14 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
   const thinkingLevel = modeCfg?.thinkingLevel ?? config.thinkingLevel;
   const toolNames = modeCfg?.tools ?? modeDef.tools;
 
-  const prompt = assemblePrompt({ mode: trigger.mode, config, context, event, trigger });
+  // Repo-authored context: the target repo's own AGENTS.md/CLAUDE.md and skill manifest,
+  // gated by config. Read-only and best-effort — never blocks the run.
+  const project = loadProjectContext(cwd, {
+    instructionFiles: config.context.instructionFiles,
+    skills: config.context.skills,
+  });
+
+  const prompt = assemblePrompt({ mode: trigger.mode, config, context, event, trigger, project });
   const branding = config.appearance;
 
   // Reuse an existing crab'd comment on this subject (sticky) instead of stacking new ones.
