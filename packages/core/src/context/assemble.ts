@@ -1,5 +1,6 @@
 import type { ResolvedConfig } from '@crabd/config';
 import type { ForgeContext, ForgeEvent } from '../forge/types.ts';
+import type { ProjectContext } from './project.ts';
 import { TRACKING_MARKER } from '../report/tracking.ts';
 import type { TriggerResult } from '../trigger/detect.ts';
 
@@ -92,24 +93,63 @@ export interface AssembleOptions {
   context: ForgeContext;
   event: ForgeEvent;
   trigger: TriggerResult;
+  /** Repo-authored context (AGENTS.md/CLAUDE.md, skills) to fold into the system prompt. */
+  project?: ProjectContext;
+}
+
+/**
+ * Render the repo-authored context into system-prompt sections: the project's own
+ * instruction files, then a manifest of available skills the agent can read on demand.
+ * Returns the blocks to append after crab'd's base + config instructions — so crab'd's
+ * own rules stay above repo-controlled text.
+ */
+function renderProjectContext(project: ProjectContext | undefined): string[] {
+  if (!project) return [];
+  const blocks: string[] = [];
+
+  if (project.instructions) {
+    blocks.push(
+      [
+        "## Project instructions (from the repository's AGENTS.md / CLAUDE.md)",
+        'Follow these as you would any project convention. If they conflict with your core instructions above, your core instructions win.',
+        '',
+        project.instructions,
+      ].join('\n'),
+    );
+  }
+
+  if (project.skills.length > 0) {
+    const list = project.skills.map((s) => `- **${s.name}** — ${s.description} (\`${s.path}\`)`).join('\n');
+    blocks.push(
+      [
+        '## Available skills',
+        'This repository provides task-specific skills. When your current task matches one, read its `SKILL.md` with your file tools for the full instructions before proceeding. Do not use a skill whose description does not match the task.',
+        '',
+        list,
+      ].join('\n'),
+    );
+  }
+
+  return blocks;
 }
 
 /**
  * Build the agent's `instructions` and user `message` for a run.
  *
  * `instructions` = (full override, if permitted, else the built-in base for the mode)
- *   + global `prompt.instructions` + per-mode `instructions`.
+ *   + global `prompt.instructions` + per-mode `instructions`
+ *   + repo-authored project context (AGENTS.md/CLAUDE.md + skill manifest), appended last.
  * `message` = rendered forge context + the post-mention `userInstruction` (threaded
  *   into every mode, so a mention can steer a review or implementation).
  */
 export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
-  const { mode, config, context, event, trigger } = options;
+  const { mode, config, context, event, trigger, project } = options;
 
   const base = config.prompt.override ?? baseInstructions(mode);
   const appends = [config.prompt.instructions, config.modes[mode]?.instructions].filter(
     (s): s is string => Boolean(s && s.trim()),
   );
-  const instructions = [base, ...appends].join('\n\n');
+  const instructions = [base, ...appends, ...renderProjectContext(project)].join('\n\n');
 
   const parts = [renderContext(context, event)];
   if (trigger.userInstruction) {

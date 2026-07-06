@@ -143,7 +143,7 @@ async function main(): Promise<number> {
   const { config, extensionPath } = await loadResolvedConfig({ adapter, event, cwd });
   await registerExtensionModes(extensionPath, cwd);
 
-  const outcome = await prepareRun({ adapter, config, event });
+  const outcome = await prepareRun({ adapter, config, event, cwd });
   if (outcome.status === 'skip') {
     log(`skip: ${outcome.reason}`);
     return 0;

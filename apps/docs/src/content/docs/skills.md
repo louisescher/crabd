@@ -7,6 +7,12 @@ crab'd ships [Claude Code](https://claude.com/claude-code) **skills** — task-f
 while working in your editor/agent. They live in the [`skills/`](https://github.com/louisescher/crabd/tree/main/skills)
 directory of the repo.
 
+:::note
+These are skills for **you**, working *on* a crab'd setup. If you want the crab'd **agent** to use
+*your repository's* skills (under `.agents/skills/` or `.claude/skills/`) when it runs, see
+[Project context](/project-context/) — that's automatic and separate from this page.
+:::
+
 ## Install
 
 Copy a skill into your project or user skills directory:

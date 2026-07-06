@@ -43,6 +43,8 @@ export interface ResolvedConfig {
   permissions: { allowedAssociations: string[] };
   review: { commentOnly: boolean };
   webSearch: { enabled: boolean; maxResults: number };
+  /** Which repo-authored context (instruction files, skills) crab'd pulls into the prompt. */
+  context: { instructionFiles: boolean; skills: boolean };
   prompt: {
     /** Accumulated global instructions (all layers, in precedence order). */
     instructions: string;
@@ -218,6 +220,10 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
   const webSearchEnabled = pickScalar('web_search.enabled', (c) => c.web_search?.enabled, layers, locked) ?? true;
   const webSearchMax = pickScalar('web_search.max_results', (c) => c.web_search?.max_results, layers, locked) ?? 5;
 
+  const instructionFiles =
+    pickScalar('context.instruction_files', (c) => c.context?.instruction_files, layers, locked) ?? true;
+  const skillsEnabled = pickScalar('context.skills', (c) => c.context?.skills, layers, locked) ?? true;
+
   const maxTurns = requireDefined(
     pickScalar('limits.max_turns', (c) => c.limits?.max_turns, layers, locked),
     'limits.max_turns',
@@ -237,6 +243,7 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
     permissions: { allowedAssociations },
     review: { commentOnly },
     webSearch: { enabled: webSearchEnabled, maxResults: webSearchMax },
+    context: { instructionFiles, skills: skillsEnabled },
     prompt: {
       instructions: promptInstructions,
       override: resolveOverride(options.repoSlug, orgLayer, repoLayer),

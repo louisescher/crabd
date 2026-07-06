@@ -29,6 +29,12 @@ export {
   type AssembledPrompt,
   type AssembleOptions,
 } from './context/assemble.ts';
+export {
+  loadProjectContext,
+  type LoadProjectContextOptions,
+  type ProjectContext,
+  type SkillSummary,
+} from './context/project.ts';
 
 // Policy
 export { authorizeActor, type AuthorizationResult } from './policy/trust.ts';
