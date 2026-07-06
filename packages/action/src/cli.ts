@@ -12,6 +12,7 @@ import {
   registerMode,
   renderRateLimitExhausted,
   reportRunError,
+  type FailureKind,
   type ForgeEvent,
   type ModeDefinition,
 } from '@crabd/core';
@@ -71,8 +72,35 @@ function extractImageUrls(...texts: (string | undefined)[]): string[] {
  * subprocess instead and is handled by the generic error path.
  */
 type CrabdTurnResult =
-  | { ok: true; data: unknown; meta?: { modelUsed?: string; fellBackFrom?: string } }
-  | { ok: false; error: { kind: string; message: string; attempts: number; lastModel?: string } };
+  | { ok: true; data: unknown; meta?: { modelUsed?: string; fellBackFrom?: string; partial?: boolean } }
+  | {
+      ok: false;
+      error: {
+        kind: string;
+        message?: string;
+        /** rate_limited only. */
+        attempts?: number;
+        lastModel?: string;
+        /** max_turns only. */
+        maxTurns?: number;
+        /** timeout only. */
+        timeoutMinutes?: number;
+      };
+    };
+
+/** The Actions run URL, for a "run logs" link in comments (GitHub + Forgejo set these). */
+function runUrlFromEnv(): string | undefined {
+  const server = process.env.GITHUB_SERVER_URL;
+  const repo = process.env.GITHUB_REPOSITORY;
+  const runId = process.env.GITHUB_RUN_ID;
+  return server && repo && runId ? `${server}/${repo}/actions/runs/${runId}` : undefined;
+}
+
+/** Failure kinds crab'd renders a tailored comment for; anything else falls back to `error`. */
+const TAILORED_FAILURE_KINDS: readonly FailureKind[] = ['max_turns', 'timeout', 'config', 'network'];
+function toFailureKind(kind: string): FailureKind {
+  return (TAILORED_FAILURE_KINDS as readonly string[]).includes(kind) ? (kind as FailureKind) : 'error';
+}
 
 /** Run `flue run workflow:crabd-turn` once and return the parsed structured result. */
 function runFlueTurn(mode: string, message: string, images: string[]): CrabdTurnResult {
@@ -205,39 +233,69 @@ async function main(): Promise<number> {
 
   const images = extractImageUrls(event.comment?.body, context.issue?.body, context.pullRequest?.body);
 
+  const runUrl = runUrlFromEnv();
+
   let turn: CrabdTurnResult;
   try {
     turn = runFlueTurn(plan.mode, plan.message, images);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    log(`model turn failed: ${message}`);
-    await reportRunError(adapter, plan, message);
+    const raw = error instanceof Error ? error.message : String(error);
+    log(`model turn failed: ${raw}`);
+    // The turn normally returns fatal failures structured (see below); this path is only a
+    // hard subprocess crash. execFileSync reports "Command failed: <full command + serialized
+    // prompt>" — never post that; the real cause is in the run logs (stderr is inherited there).
+    const detail = raw.startsWith('Command failed:') ? undefined : raw;
+    await reportRunError(adapter, plan, {
+      kind: 'error',
+      ...(detail ? { detail } : {}),
+      ...(config.triggerPhrase ? { triggerPhrase: config.triggerPhrase } : {}),
+      ...(runUrl ? { runUrl } : {}),
+    });
     return 1;
   }
 
-  // Every model in the chain was rate-limited (or the wait budget ran out). Apply the
-  // per-mode exhaustion policy: soft-finish green, or fail the check.
   if (!turn.ok) {
-    const soft = exhaustionIsSoft(config, plan.mode);
-    log(`rate-limited: exhausted after ${turn.error.attempts} attempt(s); ${soft ? 'soft-finishing' : 'failing check'}`);
-    await adapter.updateTrackingComment(
-      plan.tracking,
-      renderRateLimitExhausted(plan.branding, {
-        mode: plan.mode,
-        attempts: turn.error.attempts,
-        ...(turn.error.lastModel ? { lastModel: turn.error.lastModel } : {}),
-        soft,
-        triggerPhrase: config.triggerPhrase,
-      }),
-    );
-    return soft ? 0 : 1;
+    // Every model in the chain was rate-limited (or the wait budget ran out). Apply the
+    // per-mode exhaustion policy: soft-finish green, or fail the check.
+    if (turn.error.kind === 'rate_limited') {
+      const soft = exhaustionIsSoft(config, plan.mode);
+      log(`rate-limited: exhausted after ${turn.error.attempts ?? 0} attempt(s); ${soft ? 'soft-finishing' : 'failing check'}`);
+      await adapter.updateTrackingComment(
+        plan.tracking,
+        renderRateLimitExhausted(plan.branding, {
+          mode: plan.mode,
+          attempts: turn.error.attempts ?? 0,
+          ...(turn.error.lastModel ? { lastModel: turn.error.lastModel } : {}),
+          soft,
+          triggerPhrase: config.triggerPhrase,
+        }),
+      );
+      return soft ? 0 : 1;
+    }
+
+    // Any other terminal failure (max_turns, timeout, or an unexpected error): post a
+    // helpful, kind-specific comment with a cause, what to change, and a docs link.
+    log(`failed: ${turn.error.kind}${turn.error.message ? ` — ${turn.error.message}` : ''}`);
+    await reportRunError(adapter, plan, {
+      kind: toFailureKind(turn.error.kind),
+      ...(turn.error.message ? { detail: turn.error.message } : {}),
+      ...(turn.error.maxTurns ? { maxTurns: turn.error.maxTurns } : {}),
+      ...(turn.error.timeoutMinutes ? { timeoutMinutes: turn.error.timeoutMinutes } : {}),
+      ...(config.triggerPhrase ? { triggerPhrase: config.triggerPhrase } : {}),
+      ...(runUrl ? { runUrl } : {}),
+    });
+    return 1;
   }
 
   const data = turn.data;
-  const note =
-    turn.meta?.fellBackFrom && turn.meta.modelUsed
-      ? `Primary model \`${turn.meta.fellBackFrom}\` was rate-limited — completed with \`${turn.meta.modelUsed}\`.`
-      : undefined;
+  const notes: string[] = [];
+  if (turn.meta?.fellBackFrom && turn.meta.modelUsed) {
+    notes.push(`Primary model \`${turn.meta.fellBackFrom}\` was rate-limited — completed with \`${turn.meta.modelUsed}\`.`);
+  }
+  if (turn.meta?.partial) {
+    notes.push('Reached the step limit before finishing — this is a partial answer. Narrow the request or raise `limits.max_turns` for a complete run.');
+  }
+  const note = notes.length > 0 ? notes.join(' ') : undefined;
 
   const result = await finalizeRun({ adapter, config, event, context, trigger, plan, data, cwd, ...(note ? { note } : {}) });
 

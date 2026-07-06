@@ -26,8 +26,20 @@ const BASE_PROMPTS: Record<string, string> = {
 
 const GENERIC_BASE = "You are crab'd, an autonomous coding agent operating on a code forge.";
 
+/**
+ * The operating-environment constraint appended to every built-in base prompt. It keeps the
+ * agent from burning its turn budget chasing things it can't reach — the most common cause of
+ * a run hitting the tool-call ceiling is looping on a cross-repo file or CI system it has no
+ * access to. (Skipped when the prompt is fully overridden — that caller owns the whole base.)
+ */
+const ENVIRONMENT_NOTE = [
+  'Operating environment: you are working in a single checked-out repository.',
+  'Your file and command tools only see this checkout, and your credentials are generally scoped to this repository — you cannot browse other repositories, private APIs, or the CI/build system.',
+  'If something you need is outside this checkout, note the limitation and continue with what you have rather than spending steps retrying access you do not have.',
+].join(' ');
+
 function baseInstructions(mode: string): string {
-  return BASE_PROMPTS[mode] ?? GENERIC_BASE;
+  return `${BASE_PROMPTS[mode] ?? GENERIC_BASE}\n${ENVIRONMENT_NOTE}`;
 }
 
 export interface AssembledPrompt {
