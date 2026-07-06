@@ -67,7 +67,12 @@ export default defineConfig({
         { label: 'Operating crab\'d', items: ['self-hosting', 'identity'] },
         {
           label: 'Reference',
-          items: ['reference/config-yaml', 'reference/crabd-config-ts', 'reference/environment-variables'],
+          items: [
+            'reference/config-yaml',
+            'reference/rate-limiting',
+            'reference/crabd-config-ts',
+            'reference/environment-variables',
+          ],
         },
       ],
     }),

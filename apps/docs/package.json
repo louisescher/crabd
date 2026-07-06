@@ -11,11 +11,13 @@
     "start": "node ./dist/server/entry.mjs"
   },
   "dependencies": {
+    "@astrojs/check": "^0.9.9",
     "@astrojs/node": "^11.0.1",
     "@astrojs/starlight": "^0.41.2",
     "astro": "^7.0.5",
     "sharp": "^0.35.3",
     "starlight-llms-txt": "^0.6.0",
-    "starlight-theme-rapide": "^0.5.2"
+    "starlight-theme-rapide": "^0.5.2",
+    "typescript": "^5.9.3"
   }
 }

@@ -1,7 +1,10 @@
 import {
   DEFAULT_CONFIG,
+  type BackoffStrategy,
   type CrabdConfigPartial,
   type ModePartial,
+  type RateLimitOnExhausted,
+  type RateLimitTriggerScope,
   type ThinkingLevel,
 } from './schema.ts';
 
@@ -47,8 +50,29 @@ export interface ResolvedConfig {
     override?: string;
   };
   limits: { maxTurns: number; timeoutMinutes?: number };
+  rateLimit: ResolvedRateLimit;
   modes: Record<string, ResolvedMode>;
   mcp: ResolvedMcpServer[];
+}
+
+/** Computed backoff for crab'd-level attempts / model switches. */
+export interface ResolvedBackoff {
+  strategy: BackoffStrategy;
+  initialDelaySeconds: number;
+  maxDelaySeconds: number;
+  multiplier: number;
+  jitter: boolean;
+}
+
+export interface ResolvedRateLimit {
+  /** Ordered fallback model chain, tried after the primary. */
+  fallbackModels: string[];
+  maxRetries: number;
+  maxWaitSeconds: number;
+  triggerScope: RateLimitTriggerScope;
+  /** Undefined = apply the per-mode default (review soft, others fail). */
+  onExhausted?: RateLimitOnExhausted;
+  backoff: ResolvedBackoff;
 }
 
 /** Named config layers, lowest → highest precedence. */
@@ -199,6 +223,7 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
     'limits.max_turns',
   );
   const timeoutMinutes = pickScalar('limits.timeout_minutes', (c) => c.limits?.timeout_minutes, layers, locked);
+  const rateLimit = resolveRateLimit(layers, locked);
   const mcp = reconcileByKey('mcp', (c) => c.mcp, (s) => s.name, layers, locked) as ResolvedMcpServer[];
 
   const promptInstructions = accumulate('prompt.instructions', (c) => c.prompt?.instructions, layers, locked);
@@ -217,8 +242,66 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
       override: resolveOverride(options.repoSlug, orgLayer, repoLayer),
     },
     limits: { maxTurns, ...(timeoutMinutes !== undefined ? { timeoutMinutes } : {}) },
+    rateLimit,
     modes: resolveModes(layers, locked),
     mcp,
+  };
+}
+
+/**
+ * Resolve the `rate_limit` section. Scalars follow highest-layer-wins; `fallback_models`
+ * is a value-list replaced wholesale by the highest contributing layer (like
+ * `providers.allowlist`). `on_exhausted` stays optional — undefined means "apply the
+ * per-mode default" downstream. All non-optional leaves are backed by DEFAULT_CONFIG.
+ */
+function resolveRateLimit(layers: NamedLayer[], locked: ReadonlySet<string>): ResolvedRateLimit {
+  const rl = (c: CrabdConfigPartial) => c.rate_limit;
+  const fallbackModels = requireDefined(
+    pickScalar('rate_limit.fallback_models', (c) => rl(c)?.fallback_models, layers, locked),
+    'rate_limit.fallback_models',
+  );
+  const maxRetries = requireDefined(
+    pickScalar('rate_limit.max_retries', (c) => rl(c)?.max_retries, layers, locked),
+    'rate_limit.max_retries',
+  );
+  const maxWaitSeconds = requireDefined(
+    pickScalar('rate_limit.max_wait_seconds', (c) => rl(c)?.max_wait_seconds, layers, locked),
+    'rate_limit.max_wait_seconds',
+  );
+  const triggerScope = requireDefined(
+    pickScalar('rate_limit.trigger_scope', (c) => rl(c)?.trigger_scope, layers, locked),
+    'rate_limit.trigger_scope',
+  );
+  const onExhausted = pickScalar('rate_limit.on_exhausted', (c) => rl(c)?.on_exhausted, layers, locked);
+  const backoff: ResolvedBackoff = {
+    strategy: requireDefined(
+      pickScalar('rate_limit.backoff.strategy', (c) => rl(c)?.backoff?.strategy, layers, locked),
+      'rate_limit.backoff.strategy',
+    ),
+    initialDelaySeconds: requireDefined(
+      pickScalar('rate_limit.backoff.initial_delay_seconds', (c) => rl(c)?.backoff?.initial_delay_seconds, layers, locked),
+      'rate_limit.backoff.initial_delay_seconds',
+    ),
+    maxDelaySeconds: requireDefined(
+      pickScalar('rate_limit.backoff.max_delay_seconds', (c) => rl(c)?.backoff?.max_delay_seconds, layers, locked),
+      'rate_limit.backoff.max_delay_seconds',
+    ),
+    multiplier: requireDefined(
+      pickScalar('rate_limit.backoff.multiplier', (c) => rl(c)?.backoff?.multiplier, layers, locked),
+      'rate_limit.backoff.multiplier',
+    ),
+    jitter: requireDefined(
+      pickScalar('rate_limit.backoff.jitter', (c) => rl(c)?.backoff?.jitter, layers, locked),
+      'rate_limit.backoff.jitter',
+    ),
+  };
+  return {
+    fallbackModels,
+    maxRetries,
+    maxWaitSeconds,
+    triggerScope,
+    ...(onExhausted !== undefined ? { onExhausted } : {}),
+    backoff,
   };
 }
 

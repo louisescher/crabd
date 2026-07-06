@@ -10,6 +10,7 @@ import {
   prepareRun,
   registerBuiltinModes,
   registerMode,
+  renderRateLimitExhausted,
   reportRunError,
   type ForgeEvent,
   type ModeDefinition,
@@ -63,8 +64,18 @@ function extractImageUrls(...texts: (string | undefined)[]): string[] {
   return [...urls].slice(0, 8);
 }
 
+/**
+ * The discriminated result the crabd-turn workflow prints on stdout: a success
+ * (carrying the mode's structured `data` + which model produced it), or an
+ * in-scope rate-limit exhaustion. Any other (fatal) failure throws from the
+ * subprocess instead and is handled by the generic error path.
+ */
+type CrabdTurnResult =
+  | { ok: true; data: unknown; meta?: { modelUsed?: string; fellBackFrom?: string } }
+  | { ok: false; error: { kind: string; message: string; attempts: number; lastModel?: string } };
+
 /** Run `flue run workflow:crabd-turn` once and return the parsed structured result. */
-function runFlueTurn(mode: string, message: string, images: string[]): unknown {
+function runFlueTurn(mode: string, message: string, images: string[]): CrabdTurnResult {
   const input = JSON.stringify({ mode, message, images });
   const stdout = execFileSync(
     process.execPath,
@@ -73,7 +84,17 @@ function runFlueTurn(mode: string, message: string, images: string[]): unknown {
   );
   const trimmed = stdout.trim();
   if (!trimmed) throw new Error('crabd: the model turn produced no result');
-  return JSON.parse(trimmed);
+  return JSON.parse(trimmed) as CrabdTurnResult;
+}
+
+/**
+ * Exhaustion behavior when every model in the chain was rate-limited: an explicit
+ * `on_exhausted` config wins; otherwise the per-mode default — `review` soft-finishes
+ * (green, so a transient limit doesn't block PRs), other modes fail the check.
+ */
+function exhaustionIsSoft(config: { rateLimit: { onExhausted?: 'soft' | 'fail' } }, mode: string): boolean {
+  const decision = config.rateLimit.onExhausted ?? (mode === 'review' ? 'soft' : 'fail');
+  return decision === 'soft';
 }
 
 /** Emit a GitHub/Forgejo Actions output value. */
@@ -159,6 +180,9 @@ async function main(): Promise<number> {
   }
   if (config.mcp.length > 0) process.env.CRABD_MCP = JSON.stringify(config.mcp);
   process.env.CRABD_WEB_SEARCH = JSON.stringify(config.webSearch);
+  // Rate-limit dials (backoff, fallback chain, wait budget). The turn subprocess
+  // does the retry/fallback; on_exhausted is applied here (it needs the mode).
+  process.env.CRABD_RATE_LIMIT = JSON.stringify(config.rateLimit);
   if (config.limits.timeoutMinutes) {
     process.env.CRABD_TIMEOUT_MS = String(Math.round(config.limits.timeoutMinutes * 60_000));
   }
@@ -179,9 +203,9 @@ async function main(): Promise<number> {
 
   const images = extractImageUrls(event.comment?.body, context.issue?.body, context.pullRequest?.body);
 
-  let data: unknown;
+  let turn: CrabdTurnResult;
   try {
-    data = runFlueTurn(plan.mode, plan.message, images);
+    turn = runFlueTurn(plan.mode, plan.message, images);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log(`model turn failed: ${message}`);
@@ -189,7 +213,31 @@ async function main(): Promise<number> {
     return 1;
   }
 
-  const result = await finalizeRun({ adapter, config, event, context, trigger, plan, data, cwd });
+  // Every model in the chain was rate-limited (or the wait budget ran out). Apply the
+  // per-mode exhaustion policy: soft-finish green, or fail the check.
+  if (!turn.ok) {
+    const soft = exhaustionIsSoft(config, plan.mode);
+    log(`rate-limited: exhausted after ${turn.error.attempts} attempt(s); ${soft ? 'soft-finishing' : 'failing check'}`);
+    await adapter.updateTrackingComment(
+      plan.tracking,
+      renderRateLimitExhausted({
+        mode: plan.mode,
+        attempts: turn.error.attempts,
+        ...(turn.error.lastModel ? { lastModel: turn.error.lastModel } : {}),
+        soft,
+        triggerPhrase: config.triggerPhrase,
+      }),
+    );
+    return soft ? 0 : 1;
+  }
+
+  const data = turn.data;
+  const note =
+    turn.meta?.fellBackFrom && turn.meta.modelUsed
+      ? `Primary model \`${turn.meta.fellBackFrom}\` was rate-limited — completed with \`${turn.meta.modelUsed}\`.`
+      : undefined;
+
+  const result = await finalizeRun({ adapter, config, event, context, trigger, plan, data, cwd, ...(note ? { note } : {}) });
 
   setOutput('mode', plan.mode);
   setOutput('result', JSON.stringify(data));

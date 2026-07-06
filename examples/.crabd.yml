@@ -19,6 +19,23 @@ prompt:
 limits:
   max_turns: 40
 
+# What crab'd does when a provider rate-limits or overloads a model. The main
+# lever is falling back to a *different* model (the framework already retries the
+# same one). Waits are computed backoff — provider retry-after isn't available.
+rate_limit:
+  # Ordered, cross-provider. Tried after the primary is rate-limited.
+  fallback_models: [anthropic/claude-haiku-4-5, openai/gpt-5.5]
+  max_retries: 4
+  max_wait_seconds: 180 # total budget before giving up (caps CI minutes)
+  trigger_scope: transient # transient | rate-limit | all
+  # on_exhausted: soft   # omit for the per-mode default (review soft, others fail)
+  backoff:
+    strategy: exponential # exponential | linear | constant
+    initial_delay_seconds: 2
+    max_delay_seconds: 30
+    multiplier: 2
+    jitter: true
+
 modes:
   mention:
     enabled: true

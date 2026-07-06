@@ -7,9 +7,10 @@ export interface ProviderCheckResult {
 }
 
 /**
- * Verify every model that could be used (the default model plus each mode's
- * override) targets an allowlisted provider. This is the egress guardrail: repo
- * code must only reach approved LLM providers.
+ * Verify every model that could be used (the default model, each mode's override,
+ * and every rate-limit fallback model) targets an allowlisted provider. This is the
+ * egress guardrail: repo code must only reach approved LLM providers — including the
+ * models crab'd would fall back to when the primary is rate-limited.
  */
 export function checkProviderAllowlist(config: ResolvedConfig): ProviderCheckResult {
   // An empty allowlist means "allow any provider" — crab'd works with zero config.
@@ -29,6 +30,9 @@ export function checkProviderAllowlist(config: ResolvedConfig): ProviderCheckRes
   check(config.model, 'default');
   for (const [name, mode] of Object.entries(config.modes)) {
     if (mode.model) check(mode.model, `mode "${name}"`);
+  }
+  for (const model of config.rateLimit.fallbackModels) {
+    check(model, 'rate_limit fallback');
   }
 
   return { ok: violations.length === 0, violations };

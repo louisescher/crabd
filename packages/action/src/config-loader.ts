@@ -29,6 +29,11 @@ function inputsPartial(env: NodeJS.ProcessEnv): CrabdConfigPartial | undefined {
   if (env.CRABD_INPUT_PROVIDERS) {
     raw.providers = { allowlist: env.CRABD_INPUT_PROVIDERS.split(',').map((s) => s.trim()).filter(Boolean) };
   }
+  if (env.CRABD_INPUT_FALLBACK_MODELS) {
+    raw.rate_limit = {
+      fallback_models: env.CRABD_INPUT_FALLBACK_MODELS.split(',').map((s) => s.trim()).filter(Boolean),
+    };
+  }
   if (Object.keys(raw).length === 0) return undefined;
   return parseConfigObject(raw);
 }

@@ -38,6 +38,10 @@ Put every dial that fits in YAML here (no build step). Key rules to respect:
 - Full prompt override is governance-gated (org `full_override_repos` + repo opt-in).
 - `mcp` and `providers.custom` reconcile by key (`name` / `id`) across layers.
 - `max_turns` and `timeout_minutes` are hard limits.
+- `rate_limit` tunes provider rate-limit handling: an ordered cross-provider `fallback_models` chain,
+  computed `backoff` (no provider `retry-after` is available), a `max_wait_seconds` budget that caps CI
+  minutes, `trigger_scope`, and `on_exhausted` (unset = per-mode: `review` soft-finishes green, other
+  modes fail). `fallback_models` is a value-list (highest layer replaces).
 
 ## 4. Use `crabd.config.ts` only when needed
 

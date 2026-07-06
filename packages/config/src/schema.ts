@@ -9,7 +9,7 @@ import * as v from 'valibot';
  * Merge rules (see `merge.ts`):
  * - scalars: highest layer wins;
  * - `instructions` (prompt + per-mode): appended across ALL layers, in order;
- * - lists (`providers.allowlist`, `modes.*.tools`, ...): replaced by the highest layer;
+ * - lists (`providers.allowlist`, `modes.*.tools`, `rate_limit.fallback_models`, ...): replaced by the highest layer;
  * - keys named in `governance.locked` (org only) cannot be overridden below the org layer.
  */
 
@@ -97,6 +97,57 @@ export const LimitsPartialSchema = v.object({
 });
 export type LimitsPartial = v.InferOutput<typeof LimitsPartialSchema>;
 
+export const BACKOFF_STRATEGIES = ['exponential', 'linear', 'constant'] as const;
+export const BackoffStrategySchema = v.picklist(BACKOFF_STRATEGIES);
+export type BackoffStrategy = v.InferOutput<typeof BackoffStrategySchema>;
+
+/** Which classes of model error trigger crab'd's retry + fallback. */
+export const RATE_LIMIT_TRIGGER_SCOPES = ['transient', 'rate-limit', 'all'] as const;
+export const RateLimitTriggerScopeSchema = v.picklist(RATE_LIMIT_TRIGGER_SCOPES);
+export type RateLimitTriggerScope = v.InferOutput<typeof RateLimitTriggerScopeSchema>;
+
+/** What crab'd does once the fallback chain / wait budget is exhausted. */
+export const RATE_LIMIT_ON_EXHAUSTED = ['soft', 'fail'] as const;
+export const RateLimitOnExhaustedSchema = v.picklist(RATE_LIMIT_ON_EXHAUSTED);
+export type RateLimitOnExhausted = v.InferOutput<typeof RateLimitOnExhaustedSchema>;
+
+/**
+ * Computed backoff between crab'd-level attempts / model switches. Note: crab'd
+ * cannot honor a provider's `retry-after` (the underlying framework drops it), so
+ * these delays are always computed, and they stack on the framework's own
+ * per-model retries.
+ */
+export const BackoffPartialSchema = v.object({
+  strategy: v.optional(BackoffStrategySchema),
+  initial_delay_seconds: v.optional(v.number()),
+  max_delay_seconds: v.optional(v.number()),
+  multiplier: v.optional(v.number()),
+  jitter: v.optional(v.boolean()),
+});
+export type BackoffPartial = v.InferOutput<typeof BackoffPartialSchema>;
+
+export const RateLimitPartialSchema = v.object({
+  /**
+   * Ordered fallback model chain (`<provider>/<model>`), tried in order after the
+   * primary model is exhausted. Cross-provider is supported. Empty = no fallback.
+   * Replaced (not merged) by the highest contributing layer.
+   */
+  fallback_models: v.optional(v.array(v.string())),
+  /** Cap on crab'd-level attempts across the chain (primary + fallbacks). */
+  max_retries: v.optional(v.number()),
+  /** Total wall-clock budget (seconds) crab'd spends handling rate limits before giving up. */
+  max_wait_seconds: v.optional(v.number()),
+  /** Which error classes trigger retry/fallback (`transient` | `rate-limit` | `all`). */
+  trigger_scope: v.optional(RateLimitTriggerScopeSchema),
+  /**
+   * Behavior when the chain / budget is exhausted. Unset = per-mode default
+   * (review soft-finishes, other modes fail the check).
+   */
+  on_exhausted: v.optional(RateLimitOnExhaustedSchema),
+  backoff: v.optional(BackoffPartialSchema),
+});
+export type RateLimitPartial = v.InferOutput<typeof RateLimitPartialSchema>;
+
 /** A remote MCP server whose tools are exposed to the agent. */
 export const McpServerSchema = v.object({
   name: v.string(),
@@ -128,6 +179,7 @@ export const CrabdConfigPartialSchema = v.object({
   web_search: v.optional(WebSearchPartialSchema),
   prompt: v.optional(PromptPartialSchema),
   limits: v.optional(LimitsPartialSchema),
+  rate_limit: v.optional(RateLimitPartialSchema),
   modes: v.optional(v.record(v.string(), ModePartialSchema)),
   /** Remote MCP servers whose tools the agent may call. */
   mcp: v.optional(v.array(McpServerSchema)),
@@ -162,6 +214,22 @@ export const DEFAULT_CONFIG: CrabdConfigPartial = {
   },
   limits: {
     max_turns: 40,
+  },
+  rate_limit: {
+    // Opt-in fallback: no chain by default. Backoff governs waits between model
+    // switches and stacks on the framework's own per-model retries.
+    fallback_models: [],
+    max_retries: 4,
+    max_wait_seconds: 180,
+    trigger_scope: 'transient',
+    // on_exhausted intentionally unset — resolved per-mode (review soft, others fail).
+    backoff: {
+      strategy: 'exponential',
+      initial_delay_seconds: 2,
+      max_delay_seconds: 30,
+      multiplier: 2,
+      jitter: true,
+    },
   },
   modes: {
     mention: { enabled: true, tools: ['comment', 'commit'] },
