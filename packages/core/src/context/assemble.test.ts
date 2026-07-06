@@ -56,3 +56,27 @@ describe('assemblePrompt — project context', () => {
     expect(instructions).toContain('**run-tests** — Use to run the suite. (`.claude/skills/run-tests/SKILL.md`)');
   });
 });
+
+describe('assemblePrompt — operating-environment note', () => {
+  it('tells the agent it works in a single, scoped checkout by default', () => {
+    const instructions = assemble();
+    expect(instructions).toContain('single checked-out repository');
+    expect(instructions).toContain('cannot browse other repositories');
+  });
+
+  it('omits the note when the prompt is fully overridden (that caller owns the base)', () => {
+    const overridden = {
+      prompt: { instructions: '', override: 'Custom base prompt.' },
+      modes: { mention: { name: 'mention', enabled: true, instructions: '' } },
+    } as unknown as ResolvedConfig;
+    const instructions = assemblePrompt({
+      mode: 'mention',
+      config: overridden,
+      context,
+      event,
+      trigger: { mode: 'mention' },
+    }).instructions;
+    expect(instructions).toContain('Custom base prompt.');
+    expect(instructions).not.toContain('single checked-out repository');
+  });
+});

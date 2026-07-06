@@ -1,7 +1,7 @@
 import type { ResolvedConfig } from '@crabd/config';
 import type { ForgeAdapter, ForgeContext, ForgeEvent } from '../forge/types.ts';
 import { getMode, type FinalizeResult } from '../modes/registry.ts';
-import { renderError, renderResult } from '../report/tracking.ts';
+import { renderFailure, renderResult, type FailureRender } from '../report/tracking.ts';
 import type { TriggerResult } from '../trigger/detect.ts';
 import type { RunPlan } from './prepare.ts';
 
@@ -45,16 +45,31 @@ export async function finalizeRun(input: FinalizeInput): Promise<FinalizeResult>
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await adapter.updateTrackingComment(plan.tracking, renderError(plan.branding, plan.mode, message));
+    await adapter.updateTrackingComment(
+      plan.tracking,
+      renderFailure(plan.branding, {
+        mode: plan.mode,
+        kind: 'error',
+        detail: message,
+        ...(config.triggerPhrase ? { triggerPhrase: config.triggerPhrase } : {}),
+      }),
+    );
     throw error;
   }
 }
 
-/** Update the tracking comment with an error message (e.g. when the model run itself fails). */
+/**
+ * Update the tracking comment with a helpful, kind-aware failure message (e.g. when the
+ * model run itself fails). Defaults to a generic error; pass `kind` (and any tips it needs)
+ * to tailor the cause + fix. See {@link renderFailure}.
+ */
 export async function reportRunError(
   adapter: ForgeAdapter,
   plan: RunPlan,
-  message: string,
+  failure: Partial<Omit<FailureRender, 'mode'>> = {},
 ): Promise<void> {
-  await adapter.updateTrackingComment(plan.tracking, renderError(plan.branding, plan.mode, message));
+  await adapter.updateTrackingComment(
+    plan.tracking,
+    renderFailure(plan.branding, { ...failure, mode: plan.mode, kind: failure.kind ?? 'error' }),
+  );
 }

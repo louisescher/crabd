@@ -64,7 +64,7 @@ export default defineConfig({
             'providers/openai-compatible',
           ],
         },
-        { label: 'Operating crab\'d', items: ['self-hosting', 'identity'] },
+        { label: 'Operating crab\'d', items: ['self-hosting', 'identity', 'troubleshooting'] },
         {
           label: 'Reference',
           items: [

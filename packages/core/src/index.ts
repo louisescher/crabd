@@ -80,6 +80,7 @@ export {
 export {
   DEFAULT_BRANDING,
   renderError,
+  renderFailure,
   renderProgress,
   renderRateLimited,
   renderRateLimitExhausted,
@@ -87,6 +88,8 @@ export {
   renderWorking,
   TRACKING_MARKER,
   type Branding,
+  type FailureKind,
+  type FailureRender,
   type RateLimitedRender,
   type RateLimitExhaustedRender,
   type ResultRender,

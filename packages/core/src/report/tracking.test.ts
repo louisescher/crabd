@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_BRANDING,
   renderError,
+  renderFailure,
   renderProgress,
   renderRateLimitExhausted,
   renderResult,
@@ -67,6 +68,52 @@ describe('tracking branding — footer', () => {
     expect(body).toContain('Done');
     expect(body).not.toContain('posted by');
     expect(body.endsWith(TRACKING_MARKER)).toBe(true);
+  });
+});
+
+describe('renderFailure — helpful, kind-aware errors', () => {
+  it('explains the turn limit, names the config knob, links the docs, and shows the count', () => {
+    const body = renderFailure(custom, { mode: 'mention', kind: 'max_turns', maxTurns: 40 });
+    expect(body).toContain('tool-call limit');
+    expect(body).toContain('(40 turns)');
+    expect(body).toContain('limits.max_turns');
+    expect(body).toContain('https://crabd.lou.gg/troubleshooting/#run-hit-the-turn-limit');
+    expect(body).toMatch(/^⚠️ \*\*DevBot\*\*/);
+    expect(body.endsWith(TRACKING_MARKER)).toBe(true);
+  });
+
+  it('names the timeout knob and shows the configured minutes', () => {
+    const body = renderFailure(custom, { mode: 'review', kind: 'timeout', timeoutMinutes: 15 });
+    expect(body).toContain('ran out of time');
+    expect(body).toContain('15-minute');
+    expect(body).toContain('limits.timeout_minutes');
+    expect(body).toContain('https://crabd.lou.gg/troubleshooting/#run-timed-out');
+  });
+
+  it('renders a retry hint when a trigger phrase is given', () => {
+    const body = renderFailure(custom, { mode: 'mention', kind: 'error', triggerPhrase: '/crabd' });
+    expect(body).toContain('comment `/crabd` to try again');
+  });
+
+  it('shows the underlying detail in a collapsed block and truncates long detail', () => {
+    const short = renderFailure(custom, { mode: 'mention', kind: 'error', detail: 'boom' });
+    expect(short).toContain('<details><summary>Error details</summary>');
+    expect(short).toContain('boom');
+
+    const long = renderFailure(custom, { mode: 'mention', kind: 'error', detail: 'x'.repeat(2000) });
+    expect(long).toContain('… [truncated]');
+    expect(long.length).toBeLessThan(2000);
+  });
+
+  it('appends a run-logs link when provided', () => {
+    const body = renderFailure(custom, { mode: 'mention', kind: 'error', runUrl: 'https://ci/run/1' });
+    expect(body).toContain('[run logs](https://ci/run/1)');
+  });
+
+  it('renderError delegates to a generic failure (backward compatible)', () => {
+    const body = renderError(custom, 'mention', 'boom');
+    expect(body).toContain('**DevBot** hit an error');
+    expect(body).toContain('boom');
   });
 });
 

@@ -213,6 +213,36 @@ function configuredWebSearchTools(): ToolDefinition[] {
   return webSearchTools({ maxResults: cfg.maxResults ?? 5 });
 }
 
+/** How long the graceful wrap-up (final-answer) prompt may run before it's abandoned. */
+const WRAP_UP_TIMEOUT_MS = 90_000;
+
+/**
+ * Instruction for the wrap-up prompt. When a run reaches its soft tool-call budget, crab'd
+ * asks the model to stop exploring and return its best structured answer from what it has
+ * already gathered — so a run that would otherwise die at the hard ceiling with no output
+ * instead posts a useful partial answer.
+ */
+const WRAP_UP_INSTRUCTION = [
+  'You have reached the tool-call budget for this run and can no longer use tools — any further tool call will end the run immediately.',
+  'Do not call any tools. Based only on what you have already gathered, produce your final structured answer now.',
+  'If you could not fully complete the task, give your best partial answer: summarize what you found and verified, and clearly call out what remains unresolved. Since you can no longer make changes, set any "made changes" / edit flags to false.',
+].join('\n');
+
+/**
+ * Map a fatal turn error into the structured failure the CLI renders a helpful comment from.
+ * A deliberate max_turns abort is flagged explicitly; a durability timeout is detected by
+ * message; everything else is a generic error. Never surfaces a raw stack trace to the user.
+ */
+function describeFatal(message: string, maxTurnsHit: boolean, maxTurns?: number): Record<string, JsonValue> {
+  if (maxTurnsHit) return { kind: 'max_turns', message, ...(maxTurns ? { maxTurns } : {}) };
+  const m = message.toLowerCase();
+  if (m.includes('timeout') || m.includes('timed out') || m.includes('durabilit')) {
+    const minutes = timeoutMs && Number.isFinite(timeoutMs) ? Math.round(timeoutMs / 60_000) : undefined;
+    return { kind: 'timeout', message, ...(minutes ? { timeoutMinutes: minutes } : {}) };
+  }
+  return { kind: 'error', message };
+}
+
 export default defineWorkflow({
   agent,
   input: v.object({
@@ -247,6 +277,12 @@ export default defineWorkflow({
     const chain = buildAttemptChain(primaryModel, rl.fallbackModels, rl.maxRetries);
     const maxWaitMs = Math.max(0, rl.maxWaitSeconds) * 1000;
     const maxTurns = process.env.CRABD_MAX_TURNS ? Number(process.env.CRABD_MAX_TURNS) : undefined;
+    // Reserve a few turns at the end of the budget for a graceful wrap-up: crab'd stops
+    // exploring at `softLimit` and spends the reserve asking the model for a final answer,
+    // so reaching the ceiling yields a useful partial answer instead of a bare abort.
+    const hasMaxTurns = !!(maxTurns && Number.isFinite(maxTurns) && maxTurns > 0);
+    const wrapUpReserve = hasMaxTurns ? Math.min(4, Math.max(1, Math.floor(maxTurns! * 0.15))) : 0;
+    const softLimit = hasMaxTurns ? Math.max(1, maxTurns! - wrapUpReserve) : 0;
 
     // Best-effort, throttled tracking-comment update while a model is being rate-limited.
     let lastRlUpdate = 0;
@@ -264,12 +300,19 @@ export default defineWorkflow({
     let currentModel = primaryModel;
     let currentHandle: { abort: (reason?: unknown) => void } | undefined;
     let abortedForMaxTurns = false;
+    let wrapUpRequested = false;
     const unsubscribe = observe((event) => {
       if (event.type === 'tool_start') {
         toolStarts += 1;
-        if (maxTurns && Number.isFinite(maxTurns) && toolStarts > maxTurns && currentHandle) {
+        if (!hasMaxTurns || !currentHandle) return;
+        if (toolStarts > maxTurns!) {
+          // Hard ceiling — abort for real.
           abortedForMaxTurns = true;
           currentHandle.abort(new Error(`crabd: max_turns (${maxTurns}) exceeded`));
+        } else if (!wrapUpRequested && softLimit < maxTurns! && toolStarts > softLimit) {
+          // Soft ceiling — stop exploring and spend the reserve on a final answer.
+          wrapUpRequested = true;
+          currentHandle.abort(new Error('crabd: wrap-up budget reached'));
         }
         return;
       }
@@ -282,19 +325,45 @@ export default defineWorkflow({
     // One attempt = one full model call (which itself includes the framework's
     // same-model retries). Fallback attempts use a fresh session so a failed turn
     // isn't carried into the retry's context.
-    const runOnce = async (model: string, index: number): Promise<{ data: JsonValue; model?: string }> => {
+    type TurnResult = { data: JsonValue; model?: string; partial?: boolean };
+    const runOnce = async (model: string, index: number): Promise<TurnResult> => {
       currentModel = model;
       toolStarts = 0;
       abortedForMaxTurns = false;
+      wrapUpRequested = false;
       const session = index === 0 ? await harness.session() : await harness.session(`crabd-fallback-${index}`);
       const handle = session.prompt(input.message, { ...promptOptions, model });
       currentHandle = handle;
-      return (await handle) as unknown as { data: JsonValue; model?: string };
+      try {
+        return (await handle) as unknown as TurnResult;
+      } catch (err) {
+        // Soft budget hit (not the hard ceiling, not a rate limit): reuse the session's
+        // conversation to ask for a best-effort final answer. Bounded by a timeout and fully
+        // best-effort — if it can't produce one, fall through to normal max_turns handling.
+        if (wrapUpRequested && !abortedForMaxTurns) {
+          try {
+            const wrapHandle = session.prompt(WRAP_UP_INSTRUCTION, {
+              ...promptOptions,
+              model,
+              signal: AbortSignal.timeout(WRAP_UP_TIMEOUT_MS),
+            });
+            currentHandle = wrapHandle;
+            const wrapped = (await wrapHandle) as unknown as TurnResult;
+            return { ...wrapped, partial: true };
+          } catch {
+            // Wrap-up failed (session busy after abort, timed out, or hit the hard ceiling):
+            // treat as a normal turn-budget exhaustion so the CLI posts the max_turns comment.
+            abortedForMaxTurns = true;
+            throw new Error(`crabd: max_turns (${maxTurns}) exceeded`);
+          }
+        }
+        throw err;
+      }
     };
 
     let outcome;
     try {
-      outcome = await runWithFallback<{ data: JsonValue; model?: string }>({
+      outcome = await runWithFallback<TurnResult>({
         chain,
         triggerScope: rl.triggerScope,
         backoff: rl.backoff,
@@ -316,6 +385,12 @@ export default defineWorkflow({
           );
         },
       });
+    } catch (err) {
+      // A fatal error escaped the fallback loop — a deliberate max_turns abort, a durability
+      // timeout, or an unexpected model/tool failure. Return it as a structured failure so the
+      // CLI posts a helpful comment instead of the subprocess dying with a raw stack trace.
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: describeFatal(message, abortedForMaxTurns, maxTurns) } as JsonValue;
     } finally {
       unsubscribe();
     }
@@ -323,6 +398,7 @@ export default defineWorkflow({
     if (outcome.ok) {
       const meta: Record<string, JsonValue> = { modelUsed: outcome.result.model ?? outcome.model };
       if (outcome.fellBack) meta.fellBackFrom = primaryModel;
+      if (outcome.result.partial) meta.partial = true;
       return { ok: true, data: outcome.result.data, meta } as JsonValue;
     }
 

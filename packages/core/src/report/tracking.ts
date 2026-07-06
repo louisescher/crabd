@@ -1,6 +1,9 @@
 /** Hidden marker identifying a crab'd tracking comment, for sticky reuse across runs. */
 export const TRACKING_MARKER = '<!-- crabd:tracking -->';
 
+/** Base URL of the crab'd documentation site, for the actionable links in failure comments. */
+const DOCS_BASE = 'https://crabd.lou.gg';
+
 /** How crab'd presents itself in a tracking comment: the display name, brand emoji, footer. */
 export interface Branding {
   /** Display name used in comments (e.g. `crab'd`). */
@@ -126,7 +129,88 @@ export function renderResult(branding: Branding, render: ResultRender): string {
   return parts.join('\n') + footer(branding);
 }
 
-/** The tracking comment body when the run fails. */
+/** The classes of terminal failure crab'd can post a tailored, actionable comment for. */
+export type FailureKind = 'max_turns' | 'timeout' | 'config' | 'network' | 'error';
+
+export interface FailureRender {
+  mode: string;
+  /** What went wrong, so the comment can tailor the cause + fix. Falls back to a generic error. */
+  kind: FailureKind;
+  /** The underlying error message, shown truncated in a collapsible block. Never a command dump. */
+  detail?: string;
+  /** Configured tool-call ceiling (`limits.max_turns`), for the max_turns tip. */
+  maxTurns?: number;
+  /** Configured wall-clock limit in minutes (`limits.timeout_minutes`), for the timeout tip. */
+  timeoutMinutes?: number;
+  /** Trigger phrase to suggest for a manual retry (e.g. `/crabd`). */
+  triggerPhrase?: string;
+  /** Link to the run logs, appended as a footer note. */
+  runUrl?: string;
+}
+
+/** Render the underlying error as a collapsed, length-capped detail block (empty when none). */
+function detailBlock(detail: string | undefined): string {
+  const clean = detail?.trim();
+  if (!clean) return '';
+  const shown = clean.length > 600 ? `${clean.slice(0, 600)}\n… [truncated]` : clean;
+  return `\n\n<details><summary>Error details</summary>\n\n\`\`\`\n${shown}\n\`\`\`\n\n</details>`;
+}
+
+/**
+ * The tracking comment when a run fails. Unlike a raw stack trace, this explains what
+ * happened, what to change (pointing at the specific config knob), and links the docs —
+ * tailored per {@link FailureKind}. This is the single renderer behind every error crab'd posts.
+ */
+export function renderFailure(branding: Branding, render: FailureRender): string {
+  const verb = MODE_VERB[render.mode] ?? 'working';
+  const name = branding.name;
+
+  let lead: string;
+  let tip: string;
+  let docs: string;
+  switch (render.kind) {
+    case 'max_turns': {
+      const limit = render.maxTurns ? ` (${render.maxTurns} turns)` : '';
+      lead = `⚠️ **${name}** stopped while ${verb} — it reached the tool-call limit${limit} before finishing.`;
+      tip = `This usually means the task was too broad for one run, or ${name} spent turns on things it couldn't complete (for example files or repositories it has no access to). **What to change:** narrow the request — point at specific files or split a large PR — or raise \`limits.max_turns\` if the task genuinely needs more steps.`;
+      docs = `[Troubleshooting → run hit the turn limit](${DOCS_BASE}/troubleshooting/#run-hit-the-turn-limit)`;
+      break;
+    }
+    case 'timeout': {
+      const limit = render.timeoutMinutes ? ` ${render.timeoutMinutes}-minute` : '';
+      lead = `⚠️ **${name}** ran out of time while ${verb} — the run exceeded its${limit} time limit.`;
+      tip = `**What to change:** raise \`limits.timeout_minutes\`, or narrow the request so it finishes within the limit.`;
+      docs = `[Troubleshooting → run timed out](${DOCS_BASE}/troubleshooting/#run-timed-out)`;
+      break;
+    }
+    case 'config': {
+      lead = `⚠️ **${name}** couldn't start ${verb} — its configuration is invalid.`;
+      tip = `**What to change:** check your \`.crabd.yml\` / \`crabd.config.ts\` against the reference and fix the reported field.`;
+      docs = `[Configuration](${DOCS_BASE}/configuration/)`;
+      break;
+    }
+    case 'network': {
+      lead = `⚠️ **${name}** hit a network or provider error while ${verb}.`;
+      tip = `This is usually transient. **What to change:** try again in a moment; if it keeps happening, check your provider / gateway settings and keys.`;
+      docs = `[Troubleshooting](${DOCS_BASE}/troubleshooting/)`;
+      break;
+    }
+    default: {
+      lead = `⚠️ **${name}** hit an error while ${verb}.`;
+      tip = `**What to change:** check the details below and your configuration. If this looks like a bug in ${name}, please report it.`;
+      docs = `[Troubleshooting](${DOCS_BASE}/troubleshooting/)`;
+    }
+  }
+
+  const retry = render.triggerPhrase
+    ? `Once you've adjusted things, comment \`${render.triggerPhrase}\` to try again.`
+    : undefined;
+  const runLog = render.runUrl ? `\n<sub>[run logs](${render.runUrl})</sub>` : '';
+  const parts = [lead, tip, ...(retry ? [retry] : []), `📖 ${docs}`];
+  return parts.join('\n\n') + detailBlock(render.detail) + runLog + footer(branding);
+}
+
+/** The tracking comment body when the run fails. Thin wrapper over {@link renderFailure}. */
 export function renderError(branding: Branding, mode: string, message: string): string {
-  return `⚠️ **${branding.name}** hit an error while ${MODE_VERB[mode] ?? 'working'}:\n\n\`\`\`\n${message}\n\`\`\`${footer(branding)}`;
+  return renderFailure(branding, { mode, kind: 'error', detail: message });
 }
