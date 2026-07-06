@@ -12,10 +12,18 @@ import {
   type ForgeRepo,
 } from '@crabd/core';
 
+/** Which auth strategy `buildForge` selected — the CLI uses this to reason about cross-repo scope. */
+export type ForgeAuthStrategy = 'app' | 'broker' | 'static';
+
 export interface BuiltForge {
   adapter: ForgeAdapter;
   /** The auth provider, exposed so the CLI can mint a token for the progress-tool subprocess. */
   auth: AuthProvider;
+  /**
+   * The selected strategy. `app` can mint scoped read-only tokens (cross-repo capable); `static`
+   * carries whatever the supplied token has; `broker` is single-repo by design (no cross-repo).
+   */
+  strategy: ForgeAuthStrategy;
 }
 
 /** Detect which forge we are running on from the environment. */
@@ -37,7 +45,7 @@ export function buildForge(forge: ForgeKind, repo: ForgeRepo, env: NodeJS.Proces
     if (!server) throw new Error('crabd: set CRABD_FORGEJO_API_URL to the Forgejo /api/v1 root.');
     const apiRoot = server.endsWith('/api/v1') ? server : `${server}/api/v1`;
     const auth = new StaticTokenAuth('forgejo', token);
-    return { adapter: new ForgejoForge({ auth, repo, baseUrl: apiRoot }), auth };
+    return { adapter: new ForgejoForge({ auth, repo, baseUrl: apiRoot }), auth, strategy: 'static' };
   }
 
   const baseUrl = env.CRABD_GITHUB_API_URL || env.GITHUB_API_URL || undefined;
@@ -52,7 +60,7 @@ export function buildForge(forge: ForgeKind, repo: ForgeRepo, env: NodeJS.Proces
       repo: { owner: repo.owner, name: repo.name },
       ...(baseUrl ? { baseUrl } : {}),
     });
-    return { adapter: new GitHubForge({ auth, repo, ...(baseUrl ? { baseUrl } : {}) }), auth };
+    return { adapter: new GitHubForge({ auth, repo, ...(baseUrl ? { baseUrl } : {}) }), auth, strategy: 'app' };
   }
 
   // 2. Canonical crab'd[bot] via the hosted broker — the default when OIDC is
@@ -64,7 +72,7 @@ export function buildForge(forge: ForgeKind, repo: ForgeRepo, env: NodeJS.Proces
       repo: { owner: repo.owner, name: repo.name },
       ...(env.CRABD_BROKER_AUDIENCE ? { audience: env.CRABD_BROKER_AUDIENCE } : {}),
     });
-    return { adapter: new GitHubForge({ auth, repo, ...(baseUrl ? { baseUrl } : {}) }), auth };
+    return { adapter: new GitHubForge({ auth, repo, ...(baseUrl ? { baseUrl } : {}) }), auth, strategy: 'broker' };
   }
 
   // 3. Fallback: the workflow token — works, but comments come from github-actions.
@@ -76,5 +84,5 @@ export function buildForge(forge: ForgeKind, repo: ForgeRepo, env: NodeJS.Proces
     );
   }
   const auth = new StaticTokenAuth('github', token);
-  return { adapter: new GitHubForge({ auth, repo, ...(baseUrl ? { baseUrl } : {}) }), auth };
+  return { adapter: new GitHubForge({ auth, repo, ...(baseUrl ? { baseUrl } : {}) }), auth, strategy: 'static' };
 }

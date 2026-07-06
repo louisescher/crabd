@@ -21,6 +21,8 @@ default. For how these values combine across the org repo, the repo file, CI inp
 | `review` | `object` | — | Review-mode behavior. See below. |
 | `web_search` | `object` | — | Web research tools for the agent. See below. |
 | `context` | `object` | — | Repo-authored context (`AGENTS.md`/`CLAUDE.md`, skills) crab'd pulls into the prompt. See below. |
+| `repos` | `object` | — | Cross-repo **read** access for the agent. See below. |
+| `sandbox` | `object` | — | Extra environment for the model's shell: forwarded secrets + private-registry `.npmrc`. See below. |
 | `prompt` | `object` | — | Prompt customization. See below. |
 | `limits` | `object` | — | Run limits. See below. |
 | `rate_limit` | `object` | — | Backoff, retry, and fallback-model behavior when a provider rate-limits crab'd. See below. |
@@ -115,6 +117,64 @@ full behavior.
 | --- | --- | --- | --- |
 | `instruction_files` | `boolean` | `true` | Load `AGENTS.md`, then `CLAUDE.md`, from the checkout root and append them to the system prompt (after crab'd's base + `prompt.instructions`, so core rules stay authoritative). Both are read; identical content is included once, differing content is labeled per file. Combined text is capped at 40k chars. |
 | `skills` | `boolean` | `true` | Discover skills under `.agents/skills/` and `.claude/skills/` and list each skill's `name` + `description` in the prompt. The agent reads a skill's `SKILL.md` itself when a task matches — the body is never preloaded. A skill with no description is skipped; a skill in both roots is listed once. |
+
+## `repos`
+
+Lets the agent **read** repositories besides the one it was triggered on. crab'd mints a
+**read-only** token scoped to what you allow and exposes it to the model's shell (as `GH_TOKEN`, with
+`git` preconfigured) so it can `gh api` or `git clone` those repos on demand. It can never write to
+them. See [Cross-repo access & private registries](/access/).
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `read` | `'all' \| string[]` | — (off) | `all` grants your App installation's full scope; a list of `owner/repo` (globs like `org/*` allowed) scopes a least-privilege token to those repos. |
+
+Requires a cross-repo-capable token: your **own App** (`CRABD_APP_*`), a scoped **PAT**, or a
+**Forgejo access token** (`CRABD_FORGEJO_TOKEN`) with access to those repos. The default **token
+broker vends single-repo tokens by design**, so `repos.read` is ignored under it (crab'd logs this).
+Governance-lockable at `repos.read`.
+
+```yaml
+repos:
+  read: [acme/infra, acme/design-system]   # or: read: all
+```
+
+## `sandbox`
+
+Extra environment for the model's shell — **off by default** (the sandbox is otherwise sealed). Use it
+to authenticate `pnpm`/`npm install` against a private registry. Everything here is readable by the
+model, whose shell is network-capable, so only expose what a task needs. Governance-lockable at
+`sandbox.env` / `sandbox.npmrc`. See [Cross-repo access & private registries](/access/).
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `env` | `string[]` | `[]` | **Names** of env vars (mapped from CI secrets onto the crab'd step) to forward into the shell. Only names live in config; values never do. Replaced by the highest layer. |
+| `npmrc` | `NpmRegistry[]` | `[]` | Private registries crab'd authenticates by writing a managed `.npmrc` before the run (pointed at via `NPM_CONFIG_USERCONFIG`, so it never clobbers the repo's own). |
+
+### `NpmRegistry`
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `registry` | `string` | — | Registry URL, e.g. `https://npm.pkg.github.com`. |
+| `scope` | `string` | — | Optional package scope this registry serves, e.g. `@myorg`. |
+| `token_env` | `string` | — | Env-var name holding the auth token, written as `${NAME}` (expanded at runtime). The var is forwarded automatically. Omit for GitHub Packages in the same org — crab'd falls back to the exposed forge token (needs the App granted `packages: read`). |
+
+```yaml
+sandbox:
+  env: [NODE_AUTH_TOKEN]
+  npmrc:
+    - registry: https://npm.pkg.github.com
+      scope: "@myorg"
+      token_env: NODE_AUTH_TOKEN
+```
+
+The secret itself is provided once as an env var on the crab'd step (a secret can't live in config):
+
+```yaml title="workflow"
+- uses: louisescher/crabd@v0
+  env:
+    NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+```
 
 ## `prompt`
 

@@ -27,19 +27,41 @@ const BASE_PROMPTS: Record<string, string> = {
 const GENERIC_BASE = "You are crab'd, an autonomous coding agent operating on a code forge.";
 
 /**
- * The operating-environment constraint appended to every built-in base prompt. It keeps the
+ * The default operating-environment note appended to every built-in base prompt. It keeps the
  * agent from burning its turn budget chasing things it can't reach — the most common cause of
  * a run hitting the tool-call ceiling is looping on a cross-repo file or CI system it has no
  * access to. (Skipped when the prompt is fully overridden — that caller owns the whole base.)
  */
-const ENVIRONMENT_NOTE = [
+const SEALED_ENVIRONMENT_NOTE = [
   'Operating environment: you are working in a single checked-out repository.',
   'Your file and command tools only see this checkout, and your credentials are generally scoped to this repository — you cannot browse other repositories, private APIs, or the CI/build system.',
   'If something you need is outside this checkout, note the limitation and continue with what you have rather than spending steps retrying access you do not have.',
 ].join(' ');
 
-function baseInstructions(mode: string): string {
-  return `${BASE_PROMPTS[mode] ?? GENERIC_BASE}\n${ENVIRONMENT_NOTE}`;
+/**
+ * The operating-environment note, made aware of any configured cross-repo READ access
+ * (`repos.read`) and the forge. Sealed/single-repo by default; when access is granted, it tells the
+ * agent which repos it may read and how (`GH_TOKEN` + preconfigured `git`; `gh` on GitHub only).
+ */
+function environmentNote(repos: ResolvedConfig['repos'] | undefined, forge: string): string {
+  const read = repos?.read;
+  if (!read || (Array.isArray(read) && read.length === 0)) return SEALED_ENVIRONMENT_NOTE;
+  const scope =
+    read === 'all' ? 'any repository your token can access' : `these repositories: ${read.join(', ')}`;
+  // `gh` is GitHub-only; on Forgejo the agent uses git or the Forgejo API.
+  const how =
+    forge === 'forgejo'
+      ? '`git clone --depth 1 https://HOST/OWNER/REPO` or the Forgejo API (`/api/v1`)'
+      : '`gh api` for a single file (e.g. `gh api repos/OWNER/REPO/contents/PATH`) or `git clone --depth 1 https://HOST/OWNER/REPO`';
+  return [
+    `Operating environment: you are working in the checkout of the trigger repository, and you also have READ access to ${scope}.`,
+    `A token for reading them is in your shell as \`GH_TOKEN\` and \`git\` is preconfigured to use it — read those repositories with ${how}. You may NOT write to them — your committed changes only ever land in the trigger repository.`,
+    'If you need access beyond this, note the limitation and continue rather than spending steps retrying access you do not have.',
+  ].join(' ');
+}
+
+function baseInstructions(mode: string, repos: ResolvedConfig['repos'] | undefined, forge: string): string {
+  return `${BASE_PROMPTS[mode] ?? GENERIC_BASE}\n${environmentNote(repos, forge)}`;
 }
 
 export interface AssembledPrompt {
@@ -157,7 +179,7 @@ function renderProjectContext(project: ProjectContext | undefined): string[] {
 export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
   const { mode, config, context, event, trigger, project } = options;
 
-  const base = config.prompt.override ?? baseInstructions(mode);
+  const base = config.prompt.override ?? baseInstructions(mode, config.repos, event.forge);
   const appends = [config.prompt.instructions, config.modes[mode]?.instructions].filter(
     (s): s is string => Boolean(s && s.trim()),
   );

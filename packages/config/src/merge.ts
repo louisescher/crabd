@@ -24,6 +24,14 @@ export interface ResolvedMcpServer {
   headers?: Record<string, string>;
 }
 
+/** A resolved private-registry entry crab'd writes into a managed `.npmrc` before the run. */
+export interface ResolvedNpmRegistry {
+  registry: string;
+  scope?: string;
+  /** Env-var name whose value authenticates the registry (referenced as `${tokenEnv}` in `.npmrc`). */
+  tokenEnv?: string;
+}
+
 export interface ResolvedMode {
   name: string;
   enabled: boolean;
@@ -47,6 +55,10 @@ export interface ResolvedConfig {
   webSearch: { enabled: boolean; maxResults: number };
   /** Which repo-authored context (instruction files, skills) crab'd pulls into the prompt. */
   context: { instructionFiles: boolean; skills: boolean };
+  /** Cross-repo READ access exposed to the model via a scoped token in its shell (off by default). */
+  repos: { read?: 'all' | string[] };
+  /** Extra sandbox environment: forwarded env-var names + managed `.npmrc` registries. */
+  sandbox: { env: string[]; npmrc: ResolvedNpmRegistry[] };
   prompt: {
     /** Accumulated global instructions (all layers, in precedence order). */
     instructions: string;
@@ -232,6 +244,19 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
     pickScalar('context.instruction_files', (c) => c.context?.instruction_files, layers, locked) ?? true;
   const skillsEnabled = pickScalar('context.skills', (c) => c.context?.skills, layers, locked) ?? true;
 
+  // Cross-repo read access + extra sandbox env are value-lists replaced by the highest
+  // contributing layer (like providers.allowlist). Both are governance-lockable per exact path
+  // (`repos.read`, `sandbox.env`, `sandbox.npmrc`), since they expose repos/secrets to the model.
+  const reposRead = pickScalar('repos.read', (c) => c.repos?.read, layers, locked);
+  const sandboxEnv = pickScalar('sandbox.env', (c) => c.sandbox?.env, layers, locked) ?? [];
+  const sandboxNpmrc: ResolvedNpmRegistry[] = (
+    pickScalar('sandbox.npmrc', (c) => c.sandbox?.npmrc, layers, locked) ?? []
+  ).map((r) => ({
+    registry: r.registry,
+    ...(r.scope ? { scope: r.scope } : {}),
+    ...(r.token_env ? { tokenEnv: r.token_env } : {}),
+  }));
+
   const maxTurns = requireDefined(
     pickScalar('limits.max_turns', (c) => c.limits?.max_turns, layers, locked),
     'limits.max_turns',
@@ -253,6 +278,8 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
     review: { commentOnly },
     webSearch: { enabled: webSearchEnabled, maxResults: webSearchMax },
     context: { instructionFiles, skills: skillsEnabled },
+    repos: { ...(reposRead !== undefined ? { read: reposRead } : {}) },
+    sandbox: { env: sandboxEnv, npmrc: sandboxNpmrc },
     prompt: {
       instructions: promptInstructions,
       override: resolveOverride(options.repoSlug, orgLayer, repoLayer),

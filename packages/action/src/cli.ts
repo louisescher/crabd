@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadCrabdExtension } from '@crabd/config';
@@ -18,6 +19,7 @@ import {
 } from '@crabd/core';
 import { loadResolvedConfig } from './config-loader.ts';
 import { buildForge, detectForge } from './forge-factory.ts';
+import { forgeHost, gitCredentialEnv, renderNpmrc, scopedRepoNames } from './sandbox.ts';
 
 const ACTION_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -166,10 +168,17 @@ async function main(): Promise<number> {
   }
 
   const cwd = process.env.GITHUB_WORKSPACE ?? process.cwd();
-  const { adapter, auth } = buildForge(forge, event.repo);
+  const { adapter, auth, strategy } = buildForge(forge, event.repo);
 
   const { config, extensionPath } = await loadResolvedConfig({ adapter, event, cwd });
   await registerExtensionModes(extensionPath, cwd);
+
+  // Multi-repo read needs a cross-repo-capable token. The broker vends single-repo tokens by
+  // design, so ignore repos.read under it — keeping the prompt honest (no false GH_TOKEN claim).
+  if (strategy === 'broker' && config.repos.read !== undefined) {
+    log('repos.read is set but the token broker only vends single-repo tokens — ignoring. Use your own App (CRABD_APP_*) or a scoped PAT for cross-repo access.');
+    delete config.repos.read;
+  }
 
   const outcome = await prepareRun({ adapter, config, event, cwd });
   if (outcome.status === 'skip') {
@@ -229,6 +238,62 @@ async function main(): Promise<number> {
   } catch (error) {
     // Progress updates are best-effort; a token failure here shouldn't block the run.
     log(`progress tool disabled: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  // --- Sandbox access: cross-repo read token, forwarded secrets, private-registry .npmrc ---
+  // All opt-in via config. Anything placed here is visible to the model's (network-capable) shell.
+  const sandboxEnv: Record<string, string> = {};
+
+  // (a) Forward allowlisted env vars (values come from CI secrets mapped onto the crab'd step).
+  for (const name of config.sandbox.env) {
+    const value = process.env[name];
+    if (value) sandboxEnv[name] = value;
+    else log(`sandbox.env: "${name}" is not set in the environment — skipping`);
+  }
+
+  // (b) Cross-repo READ (or a GitHub Packages .npmrc with no explicit token): expose a
+  //     read-only forge token so the model can `gh`/`git` other repos on demand.
+  const npmrcNeedsForgeToken = config.sandbox.npmrc.some((r) => !r.tokenEnv);
+  if (config.repos.read !== undefined || npmrcNeedsForgeToken) {
+    try {
+      let token: string | undefined;
+      if (strategy === 'app' && typeof auth.mintScopedToken === 'function') {
+        const names = scopedRepoNames(config.repos.read, event.repo.name);
+        token = await auth.mintScopedToken(names ? { repositoryNames: names } : {});
+      } else if (strategy === 'static') {
+        token = await auth.getToken(); // scope is whatever the supplied token already has
+      }
+      if (token) {
+        sandboxEnv.GH_TOKEN = token;
+        // Preconfigure git so plain `git clone https://host/owner/repo` authenticates (forge-aware:
+        // GitHub needs the `x-access-token` username, Forgejo takes the token itself).
+        Object.assign(sandboxEnv, gitCredentialEnv(forge, forgeHost(process.env.GITHUB_SERVER_URL), token));
+      }
+    } catch (error) {
+      log(`sandbox read token unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // (c) Private registries: forward any explicit token env-vars, write a managed .npmrc, and
+  //     point npm/pnpm at it via NPM_CONFIG_USERCONFIG (never clobbering the repo's own .npmrc).
+  if (config.sandbox.npmrc.length > 0) {
+    for (const r of config.sandbox.npmrc) {
+      if (r.tokenEnv && !(r.tokenEnv in sandboxEnv)) {
+        const value = process.env[r.tokenEnv];
+        if (value) sandboxEnv[r.tokenEnv] = value;
+        else log(`sandbox.npmrc: token env "${r.tokenEnv}" is not set — the registry may fail to authenticate`);
+      }
+    }
+    const npmrc = renderNpmrc(config.sandbox.npmrc, 'GH_TOKEN');
+    if (npmrc) {
+      const npmrcPath = join(tmpdir(), 'crabd.npmrc');
+      writeFileSync(npmrcPath, npmrc, 'utf-8');
+      sandboxEnv.NPM_CONFIG_USERCONFIG = npmrcPath;
+    }
+  }
+
+  if (Object.keys(sandboxEnv).length > 0) {
+    process.env.CRABD_SANDBOX_ENV = JSON.stringify(sandboxEnv);
   }
 
   const images = extractImageUrls(event.comment?.body, context.issue?.body, context.pullRequest?.body);

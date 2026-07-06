@@ -48,7 +48,7 @@ export default defineConfig({
         { label: 'Start here', items: ['getting-started', 'skills'] },
         {
           label: 'Guides',
-          items: ['configuration', 'custom-prompts', 'project-context', 'config-layering', 'data-egress'],
+          items: ['configuration', 'custom-prompts', 'project-context', 'access', 'config-layering', 'data-egress'],
         },
         {
           label: 'Concepts',
