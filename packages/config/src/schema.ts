@@ -112,6 +112,46 @@ export const ContextPartialSchema = v.object({
 });
 export type ContextPartial = v.InferOutput<typeof ContextPartialSchema>;
 
+export const ReposPartialSchema = v.object({
+  /**
+   * Repositories (besides the trigger repo) the agent may **read** during a run. `'all'` grants
+   * the App installation's full scope; a list of `owner/repo` (globs allowed, e.g. `org/*`) scopes
+   * a least-privilege, read-only token. crab'd exposes that token to the model's shell so it can
+   * `gh`/`git` those repos on demand. Requires the App-path or a PAT token — the broker is
+   * single-repo and cannot grant this. Off (single-repo) by default.
+   */
+  read: v.optional(v.union([v.literal('all'), v.array(v.string())])),
+});
+export type ReposPartial = v.InferOutput<typeof ReposPartialSchema>;
+
+/** A private registry crab'd authenticates by writing a managed `.npmrc` before the run. */
+export const NpmRegistrySchema = v.object({
+  /** Registry URL, e.g. `https://npm.pkg.github.com`. */
+  registry: v.string(),
+  /** Optional package scope this registry serves, e.g. `@myorg`. */
+  scope: v.optional(v.string()),
+  /**
+   * Name of the env var holding the auth token, written into `.npmrc` as `${NAME}` (npm/pnpm
+   * expand env vars at runtime). The named var is forwarded into the sandbox automatically. Omit
+   * for GitHub Packages in the same org — crab'd falls back to the forge token.
+   */
+  token_env: v.optional(v.string()),
+});
+export type NpmRegistry = v.InferOutput<typeof NpmRegistrySchema>;
+
+export const SandboxPartialSchema = v.object({
+  /**
+   * Names of environment variables (mapped from CI secrets on the crab'd step) to forward into
+   * the model's shell — e.g. `NODE_AUTH_TOKEN` for a private registry. Only the **names** live in
+   * config, never the values. Anything forwarded is readable by the model (network-capable shell).
+   * Replaced (not merged) by the highest contributing layer.
+   */
+  env: v.optional(v.array(v.string())),
+  /** Private registries crab'd authenticates by writing a managed `.npmrc` before the run. */
+  npmrc: v.optional(v.array(NpmRegistrySchema)),
+});
+export type SandboxPartial = v.InferOutput<typeof SandboxPartialSchema>;
+
 export const ReviewPartialSchema = v.object({
   /**
    * When true, crab'd posts every review as a plain COMMENT — it never formally
@@ -212,6 +252,8 @@ export const CrabdConfigPartialSchema = v.object({
   review: v.optional(ReviewPartialSchema),
   web_search: v.optional(WebSearchPartialSchema),
   context: v.optional(ContextPartialSchema),
+  repos: v.optional(ReposPartialSchema),
+  sandbox: v.optional(SandboxPartialSchema),
   prompt: v.optional(PromptPartialSchema),
   limits: v.optional(LimitsPartialSchema),
   rate_limit: v.optional(RateLimitPartialSchema),
@@ -254,6 +296,10 @@ export const DEFAULT_CONFIG: CrabdConfigPartial = {
     instruction_files: true,
     skills: true,
   },
+  // Off by default: no cross-repo access, no forwarded secrets. Both are opt-in and
+  // governance-lockable, since they put credentials / other repos in front of the model.
+  repos: {},
+  sandbox: { env: [], npmrc: [] },
   prompt: {
     instructions: '',
     allow_full_override: false,

@@ -12,6 +12,14 @@ export interface AuthProvider {
    * needed; callers may call this more than once.
    */
   getToken(): Promise<string>;
+  /**
+   * Mint a **read-only** token to expose in the model's sandbox so it can read *other*
+   * repositories (via `gh`/`git`). `repositoryNames` scopes the token to those repos (names
+   * within the token's account); omit for the installation's full scope. Optional: strategies
+   * that can't scope a token (a supplied static token / the single-repo broker) don't implement
+   * it, and the caller falls back (expose the static token as-is, or skip). Never write-scoped.
+   */
+  mintScopedToken?(options: { repositoryNames?: string[] }): Promise<string>;
 }
 
 /** A pre-issued token supplied directly (CI secret / PAT / fine-grained token). */

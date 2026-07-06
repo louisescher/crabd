@@ -31,7 +31,8 @@ How a run authenticates:
 4. The broker mints a **short-lived, single-repo-scoped** installation token and returns it.
 
 The App key never leaves the broker, and a token is only ever vended for the repo the OIDC proof came
-from, so it can't be used to reach other repos.
+from, so it can't be used to reach other repos. (That also means [cross-repo read access](/access/)
+isn't available under the broker — use your own App or a PAT for that.)
 
 ```yaml title="workflow"
 permissions:

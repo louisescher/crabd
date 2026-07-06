@@ -80,6 +80,24 @@ against the [`.crabd.yml` reference](/reference/config-yaml/) or
 [Config layering & governance](/config-layering/) if a value isn't taking effect (a higher layer may
 override or forbid it).
 
+## Cross-repo reads aren't working
+
+> the agent can't read another repository you granted with `repos.read`
+
+Most often the token can't reach it. `repos.read` needs a **cross-repo-capable** token: your own App
+(`CRABD_APP_*`, installed on those repos) or a scoped PAT. Under the default **token broker** — which
+vends single-repo tokens by design — `repos.read` is ignored (the run logs this). Check the run logs,
+and see [Cross-repo access & private registries](/access/).
+
+## Private registry install fails
+
+> `pnpm install` / `npm install` can't authenticate
+
+Confirm the secret is mapped to an env var **on the crab'd step** (`env: { NODE_AUTH_TOKEN: ${{
+secrets.… }} }`), that the same name is in `sandbox.env` (or referenced by an `sandbox.npmrc` entry's
+`token_env`), and that the registry URL/scope match your dependency. See
+[Cross-repo access & private registries](/access/#private-npm-registries).
+
 ## Unexpected error
 
 > **crab'd** hit an error …

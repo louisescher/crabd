@@ -64,12 +64,26 @@ Locked keys can't be overridden by the repo file, CI inputs, or env. See
 
 The agent edits code in a **local sandbox** rooted at the checked-out repo. Its shell/tools get an
 **empty env allowlist by default**, no host secrets leak into the model's bash tool. Expose specific
-vars only when a task needs them (via `CRABD_SANDBOX_ENV`).
+vars only when a task needs them — via the [`sandbox`](/reference/config-yaml/#sandbox) config (or
+the low-level `CRABD_SANDBOX_ENV`).
+
+Two opt-in features deliberately put credentials in front of the model (see
+[Cross-repo access & private registries](/access/)):
+
+- [`repos.read`](/reference/config-yaml/#repos) exposes a **read-only, least-privilege** forge token
+  (scoped to just the repos you allow) as `GH_TOKEN`, so the agent can read other repos.
+- [`sandbox.env`](/reference/config-yaml/#sandbox) forwards named secrets (e.g. a registry token),
+  and `sandbox.npmrc` writes a managed `.npmrc` referencing them.
+
+Both are **governance-lockable** (`repos.read`, `sandbox.env`, `sandbox.npmrc`) so an org can forbid
+individual repos from self-granting them.
 
 :::caution
 crab'd does **not** restrict the sandbox's outbound network. Flue's local sandbox exposes no
-egress allowlist. Treat the model's shell as network-capable, and rely on the provider allowlist +
-runner network policy for control.
+egress allowlist. Treat the model's shell as network-capable — **anything you expose to it
+(a forge token, a registry secret) can be read and exfiltrated by model-run commands.** Prefer the
+narrowest scope (`repos.read` mints a read-only token; scope it to specific repos, not `all`), keep
+secrets in CI secrets (never in `.crabd.yml`), and lock these keys at the org level.
 :::
 
 ## Checklist for a locked-down org
@@ -78,4 +92,5 @@ runner network policy for control.
 - [ ] `permissions.allowed_associations` restricted to trusted roles.
 - [ ] Full prompt override disabled except for named repos (`governance.full_override_repos`).
 - [ ] Provider keys and forge credentials in secrets, never in `.crabd.yml`.
+- [ ] Lock `repos.read`, `sandbox.env`, `sandbox.npmrc` if repos shouldn't self-grant cross-repo/secret access.
 - [ ] Optional: route providers through an egress `gateway_url`.

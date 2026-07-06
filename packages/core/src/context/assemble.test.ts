@@ -64,6 +64,55 @@ describe('assemblePrompt — operating-environment note', () => {
     expect(instructions).toContain('cannot browse other repositories');
   });
 
+  it('lists readable repos and drops the "cannot browse" line when repos.read is set', () => {
+    const withAccess = {
+      prompt: { instructions: '' },
+      modes: { mention: { name: 'mention', enabled: true, instructions: '' } },
+      repos: { read: ['acme/infra', 'acme/shared'] },
+    } as unknown as ResolvedConfig;
+    const instructions = assemblePrompt({
+      mode: 'mention',
+      config: withAccess,
+      context,
+      event,
+      trigger: { mode: 'mention' },
+    }).instructions;
+    expect(instructions).toContain('READ access to these repositories: acme/infra, acme/shared');
+    expect(instructions).toContain('GH_TOKEN');
+    expect(instructions).not.toContain('cannot browse other repositories');
+  });
+
+  it("says 'any repository' for repos.read: all, and mentions gh on GitHub", () => {
+    const all = {
+      prompt: { instructions: '' },
+      modes: { mention: { name: 'mention', enabled: true, instructions: '' } },
+      repos: { read: 'all' },
+    } as unknown as ResolvedConfig;
+    const instructions = assemblePrompt({ mode: 'mention', config: all, context, event, trigger: { mode: 'mention' } })
+      .instructions;
+    expect(instructions).toContain('any repository your token can access');
+    expect(instructions).toContain('gh api');
+  });
+
+  it('on Forgejo, points at git / the Forgejo API instead of gh', () => {
+    const cfg = {
+      prompt: { instructions: '' },
+      modes: { mention: { name: 'mention', enabled: true, instructions: '' } },
+      repos: { read: ['acme/infra'] },
+    } as unknown as ResolvedConfig;
+    const forgejoEvent = { ...event, forge: 'forgejo' } as ForgeEvent;
+    const instructions = assemblePrompt({
+      mode: 'mention',
+      config: cfg,
+      context,
+      event: forgejoEvent,
+      trigger: { mode: 'mention' },
+    }).instructions;
+    expect(instructions).toContain('Forgejo API');
+    expect(instructions).not.toContain('gh api');
+    expect(instructions).toContain('GH_TOKEN');
+  });
+
   it('omits the note when the prompt is fully overridden (that caller owns the base)', () => {
     const overridden = {
       prompt: { instructions: '', override: 'Custom base prompt.' },

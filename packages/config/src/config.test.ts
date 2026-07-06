@@ -234,6 +234,51 @@ describe('resolveConfig — mcp reconciliation', () => {
   });
 });
 
+describe('resolveConfig — repos & sandbox', () => {
+  it('defaults to no cross-repo access and empty sandbox', () => {
+    const r = resolveConfig({ layers: {} });
+    expect(r.repos.read).toBeUndefined();
+    expect(r.sandbox).toEqual({ env: [], npmrc: [] });
+  });
+
+  it('resolves repos.read as "all" or a list', () => {
+    expect(resolveConfig({ layers: { repo: { repos: { read: 'all' } } } }).repos.read).toBe('all');
+    expect(
+      resolveConfig({ layers: { repo: { repos: { read: ['org/a', 'org/*'] } } } }).repos.read,
+    ).toEqual(['org/a', 'org/*']);
+  });
+
+  it('resolves sandbox.env (replace) and maps npmrc token_env → tokenEnv', () => {
+    const r = resolveConfig({
+      layers: {
+        repo: {
+          sandbox: {
+            env: ['NODE_AUTH_TOKEN', 'NPM_TOKEN'],
+            npmrc: [{ registry: 'https://npm.pkg.github.com', scope: '@myorg', token_env: 'NODE_AUTH_TOKEN' }],
+          },
+        },
+      },
+    });
+    expect(r.sandbox.env).toEqual(['NODE_AUTH_TOKEN', 'NPM_TOKEN']);
+    expect(r.sandbox.npmrc).toEqual([
+      { registry: 'https://npm.pkg.github.com', scope: '@myorg', tokenEnv: 'NODE_AUTH_TOKEN' },
+    ]);
+  });
+
+  it('lets the org lock repos.read and sandbox.env against lower layers', () => {
+    const org: CrabdConfigPartial = {
+      repos: { read: ['org/allowed'] },
+      sandbox: { env: ['ORG_TOKEN'] },
+      governance: { locked: ['repos.read', 'sandbox.env'] },
+    };
+    const r = resolveConfig({
+      layers: { org, repo: { repos: { read: 'all' }, sandbox: { env: ['SNEAKY'] } } },
+    });
+    expect(r.repos.read).toEqual(['org/allowed']);
+    expect(r.sandbox.env).toEqual(['ORG_TOKEN']);
+  });
+});
+
 describe('resolveConfig — governance / locked keys', () => {
   const org: CrabdConfigPartial = {
     providers: { allowlist: ['anthropic'] },

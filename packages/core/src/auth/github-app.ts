@@ -75,4 +75,23 @@ export class GitHubAppAuth implements AuthProvider {
     this.cached = { token: result.token, expiresAt: new Date(result.expiresAt).getTime() };
     return result.token;
   }
+
+  /**
+   * Mint a fresh, **read-only** installation token for the sandbox. Scoped to
+   * `repositoryNames` when given (least privilege), else the installation's full scope
+   * (for `repos.read: all`). Not cached — it carries narrower permissions than
+   * {@link getToken}, so it must not be shared with the write-capable adapter token.
+   */
+  async mintScopedToken(options: { repositoryNames?: string[] }): Promise<string> {
+    const installationId = await this.resolveInstallationId();
+    const result = await this.auth({
+      type: 'installation',
+      installationId,
+      permissions: { contents: 'read', metadata: 'read' },
+      ...(options.repositoryNames && options.repositoryNames.length > 0
+        ? { repositoryNames: options.repositoryNames }
+        : {}),
+    });
+    return result.token;
+  }
 }

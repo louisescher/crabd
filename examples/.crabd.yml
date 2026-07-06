@@ -24,6 +24,20 @@ context:
   instruction_files: true # read AGENTS.md / CLAUDE.md from the repo root
   skills: true # discover .agents/skills/ and .claude/skills/
 
+# Let the agent READ other repositories (needs your own App or a scoped PAT — the
+# default broker is single-repo). Off by default. See https://crabd.lou.gg/access/
+# repos:
+#   read: [acme/infra, acme/design-system]  # or: read: all
+
+# Extra environment for the model's shell — e.g. to authenticate a private registry.
+# Off by default; anything here is visible to the (network-capable) shell.
+# sandbox:
+#   env: [NODE_AUTH_TOKEN] # forward CI-secret env vars by name (map them on the step)
+#   npmrc:
+#     - registry: https://npm.pkg.github.com
+#       scope: "@myorg"
+#       token_env: NODE_AUTH_TOKEN
+
 prompt:
   instructions: |
     - Match the existing code style and conventions.
