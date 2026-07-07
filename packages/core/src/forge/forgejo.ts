@@ -132,11 +132,27 @@ export class ForgejoForge implements ForgeAdapter {
   }
 
   async resolveActor(login: string): Promise<ForgeActor> {
+    const isBot = login.endsWith('[bot]');
+
+    // Prefer org membership: it is readable by any member-level token, so crab'd can authorize a
+    // commenter without the bot needing repo-admin. (Gitea gates the collaborator-permission
+    // endpoint below behind admin, a heavy grant for a review bot.) An org member maps to MEMBER;
+    // anyone else falls through to the repo permission level.
+    try {
+      const { status } = await this.api('GET', `/orgs/${this.repo.owner}/members/${encodeURIComponent(login)}`);
+      if (status >= 200 && status < 300) return { login, association: 'MEMBER', isBot };
+    } catch {
+      // Membership unreadable (token lacks org scope, or the owner is a user not an org) — fall back.
+    }
+
+    // Fallback for user-owned repos and non-member collaborators. Reading another user's permission
+    // requires the token to have repo-admin; if it can't, this throws and the caller (prepareRun)
+    // fails safe to a denied NONE actor.
     const { data } = await this.api<{ permission?: string }>(
       'GET',
       `${this.prefix}/collaborators/${login}/permission`,
     );
-    return { login, association: permissionToAssociation(data?.permission ?? 'none'), isBot: login.endsWith('[bot]') };
+    return { login, association: permissionToAssociation(data?.permission ?? 'none'), isBot };
   }
 
   async createTrackingComment(target: number, body: string): Promise<TrackingComment> {
