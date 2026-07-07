@@ -31,7 +31,8 @@ function mockFetch(responder: (call: Call) => { status: number; body: string }):
     };
     calls.push(call);
     const { status, body } = responder(call);
-    return new Response(body, { status });
+    // 204/304 must not carry a body (undici's Response constructor rejects it).
+    return new Response(status === 204 || status === 304 ? null : body, { status });
   });
   return calls;
 }
@@ -71,7 +72,19 @@ describe('ForgejoForge request shaping', () => {
     expect(calls[0]?.body).toEqual({ content: 'eyes' });
   });
 
-  it('maps Forgejo permission levels to associations (owner is Forgejo-specific)', async () => {
+  it('resolves an org member to MEMBER via the org endpoint (no admin permission lookup)', async () => {
+    const calls = mockFetch((call) =>
+      call.url.includes('/orgs/acme/members/')
+        ? { status: 204, body: '' }
+        : { status: 200, body: JSON.stringify({ permission: 'read' }) },
+    );
+    const actor = await forge().resolveActor('someone');
+    expect(actor.association).toBe('MEMBER');
+    // Short-circuits on membership — never touches the admin-gated permission endpoint.
+    expect(calls.map((c) => c.url)).toEqual(['https://forge.example.com/api/v1/orgs/acme/members/someone']);
+  });
+
+  it('falls back to the repo permission level for non-members (owner is Forgejo-specific)', async () => {
     const cases: Array<[string, string]> = [
       ['owner', 'OWNER'], // Forgejo/Gitea org owners — GitHub never returns this
       ['admin', 'OWNER'],
@@ -80,17 +93,32 @@ describe('ForgejoForge request shaping', () => {
       ['none', 'NONE'],
     ];
     for (const [permission, expected] of cases) {
-      mockFetch((call) => {
-        expect(call.url).toBe('https://forge.example.com/api/v1/repos/acme/app/collaborators/someone/permission');
-        return { status: 200, body: JSON.stringify({ permission }) };
-      });
+      mockFetch((call) =>
+        call.url.includes('/orgs/acme/members/')
+          ? { status: 404, body: '' } // not an org member
+          : { status: 200, body: JSON.stringify({ permission }) },
+      );
       const actor = await forge().resolveActor('someone');
       expect(actor.association, `${permission} -> ${expected}`).toBe(expected);
     }
   });
 
-  it('flags [bot] logins as bots regardless of permission', async () => {
-    mockFetch(() => ({ status: 200, body: JSON.stringify({ permission: 'read' }) }));
+  it('falls back to permission when org membership is unreadable (missing org scope)', async () => {
+    mockFetch((call) =>
+      call.url.includes('/orgs/acme/members/')
+        ? { status: 403, body: JSON.stringify({ message: 'forbidden' }) } // api() throws → caught → fall back
+        : { status: 200, body: JSON.stringify({ permission: 'owner' }) },
+    );
+    const actor = await forge().resolveActor('someone');
+    expect(actor.association).toBe('OWNER');
+  });
+
+  it('flags [bot] logins as bots regardless of resolution path', async () => {
+    mockFetch((call) =>
+      call.url.includes('/orgs/acme/members/')
+        ? { status: 404, body: '' }
+        : { status: 200, body: JSON.stringify({ permission: 'read' }) },
+    );
     const actor = await forge().resolveActor('renovate[bot]');
     expect(actor.isBot).toBe(true);
     expect(actor.association).toBe('NONE');
