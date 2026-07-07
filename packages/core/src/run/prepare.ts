@@ -58,7 +58,16 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
   const trigger = detectTrigger(event, { triggerPhrase: config.triggerPhrase, enabledModes, knownModes });
   if (!trigger) return { status: 'skip', reason: 'no trigger matched this event' };
 
-  const auth = authorizeActor(event.actor, config.permissions.allowedAssociations);
+  let actor = event.actor;
+  if (event.forge === 'forgejo' && !actor.isBot && actor.association.toUpperCase() === 'NONE') {
+    try {
+      actor = await adapter.resolveActor(actor.login);
+    } catch {
+      // keep the parsed actor (NONE) → denied
+    }
+  }
+
+  const auth = authorizeActor(actor, config.permissions.allowedAssociations);
   if (!auth.allowed) return { status: 'denied', reason: auth.reason ?? 'actor not authorized' };
 
   // Fast acknowledgment: react 👀 to the triggering comment so the user sees crab'd
