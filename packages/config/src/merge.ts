@@ -1,5 +1,6 @@
 import {
   DEFAULT_CONFIG,
+  REVIEW_STRICTNESS_DEFAULT,
   type BackoffStrategy,
   type CrabdConfigPartial,
   type ModePartial,
@@ -51,7 +52,7 @@ export interface ResolvedConfig {
   permissions: { allowedAssociations: string[] };
   /** How crab'd presents itself in tracking comments. */
   appearance: { name: string; emoji: string; footer: boolean };
-  review: { commentOnly: boolean };
+  review: { commentOnly: boolean; strictness: number };
   webSearch: { enabled: boolean; maxResults: number };
   /** Which repo-authored context (instruction files, skills) crab'd pulls into the prompt. */
   context: { instructionFiles: boolean; skills: boolean };
@@ -237,6 +238,8 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
   const appearanceFooter = pickScalar('appearance.footer', (c) => c.appearance?.footer, layers, locked) ?? true;
 
   const commentOnly = pickScalar('review.comment_only', (c) => c.review?.comment_only, layers, locked) ?? false;
+  const strictness =
+    pickScalar('review.strictness', (c) => c.review?.strictness, layers, locked) ?? REVIEW_STRICTNESS_DEFAULT;
   const webSearchEnabled = pickScalar('web_search.enabled', (c) => c.web_search?.enabled, layers, locked) ?? true;
   const webSearchMax = pickScalar('web_search.max_results', (c) => c.web_search?.max_results, layers, locked) ?? 5;
 
@@ -275,7 +278,7 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
     providers: { allowlist, gatewayUrl, custom },
     permissions: { allowedAssociations },
     appearance: { name: appearanceName, emoji: appearanceEmoji, footer: appearanceFooter },
-    review: { commentOnly },
+    review: { commentOnly, strictness },
     webSearch: { enabled: webSearchEnabled, maxResults: webSearchMax },
     context: { instructionFiles, skills: skillsEnabled },
     repos: { ...(reposRead !== undefined ? { read: reposRead } : {}) },

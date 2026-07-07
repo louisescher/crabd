@@ -84,6 +84,7 @@ appearance:
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `comment_only` | `boolean` | `false` | When `true`, crab'd posts every review as a plain **comment**. It never formally approves or requests changes, so it can't approve or block a PR. The verdict is still computed and shown in the summary. |
+| `strictness` | `1`–`5` | `2` | How hard crab'd hones in. `1` flags only merge-blocking correctness/security issues; `2` (default) prefers a few high-signal findings over nitpicking; `3`–`5` progressively lower the bar for a finding, keep crab'd digging instead of concluding "no issues," and make it more reluctant to APPROVE. `5` is maximally nitpicky. |
 
 The review verdict maps to a plain-language line in the summary (and, unless `comment_only`, to the
 forge review action):

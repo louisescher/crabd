@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseConfigYaml } from './yaml.ts';
 import { providerOf, resolveConfig } from './merge.ts';
-import type { CrabdConfigPartial } from './schema.ts';
+import { parseConfigObject, type CrabdConfigPartial } from './schema.ts';
 
 describe('parseConfigYaml', () => {
   it('parses a full document', () => {
@@ -42,11 +42,29 @@ describe('resolveConfig — defaults', () => {
     expect(r.thinkingLevel).toBe('medium');
     expect(r.providers.allowlist).toEqual([]);
     expect(r.review.commentOnly).toBe(false);
+    expect(r.review.strictness).toBe(2);
     expect(r.webSearch).toEqual({ enabled: true, maxResults: 5 });
     expect(r.appearance).toEqual({ name: "crab'd", emoji: '🦀', footer: true });
     expect(r.limits.maxTurns).toBe(40);
     expect(r.modes.mention?.enabled).toBe(true);
     expect(r.modes.mention?.tools).toEqual(['comment', 'commit']);
+  });
+});
+
+describe('resolveConfig — review.strictness', () => {
+  it('defaults to 2', () => {
+    expect(resolveConfig({ layers: {} }).review.strictness).toBe(2);
+  });
+
+  it('lets a repo override the level', () => {
+    const r = resolveConfig({ layers: { repo: { review: { strictness: 5 } } } });
+    expect(r.review.strictness).toBe(5);
+  });
+
+  it('rejects an out-of-range level', () => {
+    expect(() => parseConfigObject({ review: { strictness: 0 } })).toThrow();
+    expect(() => parseConfigObject({ review: { strictness: 6 } })).toThrow();
+    expect(() => parseConfigObject({ review: { strictness: 2.5 } })).toThrow();
   });
 });
 
