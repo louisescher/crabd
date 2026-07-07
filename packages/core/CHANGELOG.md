@@ -1,5 +1,17 @@
 # @crabd/core
 
+## 0.3.2
+
+### Patch Changes
+
+- 15da1e5: Actually resolve the Forgejo actor association before the trust gate. Forgejo/Gitea webhooks do
+  not carry `author_association`, so the parsed value was always `NONE` and every Forgejo actor was
+  denied — the `resolveActor` permission-lookup path existed but was never called. `prepareRun` now
+  calls `adapter.resolveActor` for Forgejo actors whose payload association is `NONE` (non-bots),
+  before authorizing, failing safe to `NONE` (denied) if the lookup errors. Combined with the
+  `owner` → `OWNER` mapping, Forgejo owners/collaborators can now trigger crab'd.
+  - @crabd/config@0.3.2
+
 ## 0.3.1
 
 ### Patch Changes
