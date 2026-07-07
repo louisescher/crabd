@@ -1,5 +1,11 @@
 # @crabd/config
 
+## 0.4.1
+
+### Patch Changes
+
+- 89c8761: Adds a way to increase how strict the reviewer is and adjusts the tone to be more neutral.
+
 ## 0.4.0
 
 ## 0.3.2
