@@ -31,12 +31,14 @@ context:
 
 # Extra environment for the model's shell — e.g. to authenticate a private registry.
 # Off by default; anything here is visible to the (network-capable) shell.
+# The token_env var is forwarded automatically and written into a managed .npmrc as
+# ${NAME}; pass it as a secret on the crab'd step (see the workflow's env: block).
 # sandbox:
-#   env: [NODE_AUTH_TOKEN] # forward CI-secret env vars by name (map them on the step)
 #   npmrc:
-#     - registry: https://npm.pkg.github.com
+#     - registry: https://registry.npmjs.org
 #       scope: "@myorg"
-#       token_env: NODE_AUTH_TOKEN
+#       token_env: NPM_TOKEN
+#   # env: [SOME_OTHER_TOKEN] # only for non-registry secrets a task needs
 
 prompt:
   instructions: |

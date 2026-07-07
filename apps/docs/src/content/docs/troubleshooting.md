@@ -93,9 +93,10 @@ and see [Cross-repo access & private registries](/access/).
 
 > `pnpm install` / `npm install` can't authenticate
 
-Confirm the secret is mapped to an env var **on the crab'd step** (`env: { NODE_AUTH_TOKEN: ${{
-secrets.… }} }`), that the same name is in `sandbox.env` (or referenced by an `sandbox.npmrc` entry's
-`token_env`), and that the registry URL/scope match your dependency. See
+Confirm the secret is mapped to an env var **on the crab'd step** (`env: { NPM_TOKEN: ${{ secrets.…
+}} }`), that the **same name** is what the `sandbox.npmrc` entry's `token_env` references (or is listed
+in `sandbox.env` for a non-registry secret), and that the registry URL/scope match your dependency. A
+name mismatch between the step's `env`, `token_env`, and the secret is the most common cause. See
 [Cross-repo access & private registries](/access/#private-npm-registries).
 
 ## Unexpected error

@@ -54,25 +54,25 @@ Authenticate `pnpm`/`npm install` against a private registry with
 
 ```yaml
 sandbox:
-  env: [NODE_AUTH_TOKEN]          # forward the secret into the shell
   npmrc:
-    - registry: https://npm.pkg.github.com
+    - registry: https://registry.npmjs.org
       scope: "@myorg"
-      token_env: NODE_AUTH_TOKEN  # referenced as ${NODE_AUTH_TOKEN} in the .npmrc
+      token_env: NPM_TOKEN   # referenced as ${NPM_TOKEN} in the .npmrc
 ```
 
 crab'd writes a **managed `.npmrc`** before the run (pointed at via `NPM_CONFIG_USERCONFIG`, so it
 never clobbers the repo's own) whose auth lines reference your token by env-var name — the token value
-is never written to disk or into config. It also forwards the named var into the shell so `pnpm
-install` can expand it.
+is never written to disk or into config. The `token_env` var is forwarded into the shell **on its
+own**, so `pnpm install` can expand it; you don't also list it under `sandbox.env`.
 
-Provide the secret **once** as an env var on the crab'd step (a secret can't live in config):
+Provide the secret **once** as an env var on the crab'd step (a secret can't live in config), naming
+it to match `token_env`:
 
 ```yaml title="workflow"
 - uses: actions/checkout@v4
 - uses: louisescher/crabd@v0
   env:
-    NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
 
 **GitHub Packages, same org:** omit `token_env` and crab'd falls back to the exposed forge token — no

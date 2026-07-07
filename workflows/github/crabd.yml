@@ -33,3 +33,4 @@ jobs:
           # broker-url: https://crabd-broker.example.com  # set if self-hosting the broker
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # NPM_TOKEN: ${{ secrets.NPM_TOKEN }}  # if using sandbox.npmrc — name must match token_env

@@ -160,20 +160,34 @@ model, whose shell is network-capable, so only expose what a task needs. Governa
 | `token_env` | `string` | — | Env-var name holding the auth token, written as `${NAME}` (expanded at runtime). The var is forwarded automatically. Omit for GitHub Packages in the same org — crab'd falls back to the exposed forge token (needs the App granted `packages: read`). |
 
 ```yaml
+# Public npm registry, private scope — needs an auth token.
 sandbox:
-  env: [NODE_AUTH_TOKEN]
+  npmrc:
+    - registry: https://registry.npmjs.org
+      scope: "@myorg"
+      token_env: NPM_TOKEN   # auto-forwarded; written into the .npmrc as ${NPM_TOKEN}
+```
+
+```yaml
+# GitHub Packages in the same org — omit token_env; crab'd reuses the forge token
+# (needs the App granted `packages: read`).
+sandbox:
   npmrc:
     - registry: https://npm.pkg.github.com
       scope: "@myorg"
-      token_env: NODE_AUTH_TOKEN
 ```
 
-The secret itself is provided once as an env var on the crab'd step (a secret can't live in config):
+A `token_env` var is forwarded into the shell **on its own** — you don't also list it under
+`sandbox.env`. Reserve `sandbox.env` for secrets that **aren't** a registry token (e.g. a repo's
+committed `.npmrc` that already references `${SOME_TOKEN}`).
+
+Provide the token once as an env var on the crab'd step — a secret can't live in config, and its
+name must match `token_env`:
 
 ```yaml title="workflow"
 - uses: louisescher/crabd@v0
   env:
-    NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
 
 ## `prompt`
