@@ -24,7 +24,7 @@ describe('detectTrigger — comments', () => {
       triggerPhrase: '@crabd',
       enabledModes: ALL_MODES,
     });
-    expect(t).toEqual({ mode: 'mention', userInstruction: 'please fix the flaky test' });
+    expect(t).toEqual({ mode: 'mention', explicit: false, userInstruction: 'please fix the flaky test' });
   });
 
   it('mention with review keyword → review mode, instruction is the remainder', () => {
@@ -32,7 +32,7 @@ describe('detectTrigger — comments', () => {
       triggerPhrase: '@crabd',
       enabledModes: ALL_MODES,
     });
-    expect(t).toEqual({ mode: 'review', userInstruction: 'focus on the migration' });
+    expect(t).toEqual({ mode: 'review', explicit: true, userInstruction: 'focus on the migration' });
   });
 
   it('mention with implement keyword and no extra text', () => {
@@ -40,7 +40,7 @@ describe('detectTrigger — comments', () => {
       triggerPhrase: '@crabd',
       enabledModes: ALL_MODES,
     });
-    expect(t).toEqual({ mode: 'implement', userInstruction: undefined });
+    expect(t).toEqual({ mode: 'implement', explicit: true, userInstruction: undefined });
   });
 
   it('matches a custom mode name as the keyword', () => {
@@ -48,15 +48,28 @@ describe('detectTrigger — comments', () => {
       triggerPhrase: '@crabd',
       enabledModes: new Set(['mention', 'triage']),
     });
-    expect(t).toEqual({ mode: 'triage', userInstruction: 'this please' });
+    expect(t).toEqual({ mode: 'triage', explicit: true, userInstruction: 'this please' });
   });
 
-  it('an unknown keyword falls back to mention with the full instruction', () => {
+  it('an unknown keyword falls back to mention (not explicit → classifiable) with the full instruction', () => {
     const t = detectTrigger(commentEvent('@crabd fix the flaky test'), {
       triggerPhrase: '@crabd',
       enabledModes: ALL_MODES,
     });
-    expect(t).toEqual({ mode: 'mention', userInstruction: 'fix the flaky test' });
+    expect(t).toEqual({ mode: 'mention', explicit: false, userInstruction: 'fix the flaky test' });
+  });
+
+  it('marks a bare mention as not explicit and a keyword-selected mode as explicit', () => {
+    const bare = detectTrigger(commentEvent('@crabd take another look please'), {
+      triggerPhrase: '@crabd',
+      enabledModes: ALL_MODES,
+    });
+    expect(bare?.explicit).toBe(false);
+    const keyword = detectTrigger(commentEvent('@crabd review'), {
+      triggerPhrase: '@crabd',
+      enabledModes: ALL_MODES,
+    });
+    expect(keyword?.explicit).toBe(true);
   });
 
   it('is case-insensitive on the phrase', () => {

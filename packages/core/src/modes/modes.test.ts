@@ -67,7 +67,7 @@ describe('review mode finalize', () => {
       config: resolveConfig({ layers: {} }),
       event: baseEvent,
       context: baseContext,
-      trigger: { mode: 'review' },
+      trigger: { mode: 'review', explicit: true },
       cwd: '/tmp',
       data: {
         summary: 'Looks mostly good.',
@@ -104,7 +104,7 @@ describe('review mode finalize', () => {
       config,
       event: baseEvent,
       context: baseContext,
-      trigger: { mode: 'review' },
+      trigger: { mode: 'review', explicit: true },
       cwd: '/tmp',
       data: { summary: 'Ship it.', verdict: 'APPROVE', findings: [] },
     });

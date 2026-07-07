@@ -36,6 +36,12 @@ export interface FinalizeResult {
  */
 export interface ModeDefinition<T = unknown> {
   name: string;
+  /**
+   * One-line description of when this mode applies. Shown to the intent classifier that
+   * routes an ambiguous mention (see prepareRun); custom modes should set it so they can be
+   * chosen. Falls back to the name when unset.
+   */
+  description?: string;
   /** Valibot schema the model's structured output must match. */
   outputSchema: v.GenericSchema<T>;
   /** Forge tool names this mode may use (documented; enforced by config allowlist). */

@@ -29,7 +29,7 @@ const event = {
 } as ForgeEvent;
 
 function assemble(project?: ProjectContext): string {
-  return assemblePrompt({ mode: 'mention', config, context, event, trigger: { mode: 'mention' }, project }).instructions;
+  return assemblePrompt({ mode: 'mention', config, context, event, trigger: { mode: 'mention', explicit: true }, project }).instructions;
 }
 
 describe('assemblePrompt — project context', () => {
@@ -75,7 +75,7 @@ describe('assemblePrompt — operating-environment note', () => {
       config: withAccess,
       context,
       event,
-      trigger: { mode: 'mention' },
+      trigger: { mode: 'mention', explicit: true },
     }).instructions;
     expect(instructions).toContain('READ access to these repositories: acme/infra, acme/shared');
     expect(instructions).toContain('GH_TOKEN');
@@ -88,7 +88,7 @@ describe('assemblePrompt — operating-environment note', () => {
       modes: { mention: { name: 'mention', enabled: true, instructions: '' } },
       repos: { read: 'all' },
     } as unknown as ResolvedConfig;
-    const instructions = assemblePrompt({ mode: 'mention', config: all, context, event, trigger: { mode: 'mention' } })
+    const instructions = assemblePrompt({ mode: 'mention', config: all, context, event, trigger: { mode: 'mention', explicit: true } })
       .instructions;
     expect(instructions).toContain('any repository your token can access');
     expect(instructions).toContain('gh api');
@@ -106,7 +106,7 @@ describe('assemblePrompt — operating-environment note', () => {
       config: cfg,
       context,
       event: forgejoEvent,
-      trigger: { mode: 'mention' },
+      trigger: { mode: 'mention', explicit: true },
     }).instructions;
     expect(instructions).toContain('Forgejo API');
     expect(instructions).not.toContain('gh api');
@@ -123,7 +123,7 @@ describe('assemblePrompt — operating-environment note', () => {
       config: overridden,
       context,
       event,
-      trigger: { mode: 'mention' },
+      trigger: { mode: 'mention', explicit: true },
     }).instructions;
     expect(instructions).toContain('Custom base prompt.');
     expect(instructions).not.toContain('single checked-out repository');
