@@ -18,6 +18,8 @@ export type ImplementOutput = v.InferOutput<typeof ImplementOutputSchema>;
 /** Implement mode: build the change on a branch and open a pull request for the issue. */
 export const implementMode: ModeDefinition<ImplementOutput> = {
   name: 'implement',
+  description:
+    "Implement a requested change end-to-end on a branch and open a pull request. Choose this when the user asks crab'd to build, add, fix, refactor, or otherwise change the code itself.",
   outputSchema: ImplementOutputSchema,
   tools: ['comment', 'commit', 'open_pr'],
   async finalize(ctx) {

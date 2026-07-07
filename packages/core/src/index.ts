@@ -96,5 +96,13 @@ export {
 } from './report/tracking.ts';
 
 // Run orchestration
-export { prepareRun, type PrepareInput, type PrepareOutcome, type RunPlan } from './run/prepare.ts';
+export {
+  prepareRun,
+  type ClassifyCandidate,
+  type ClassifyFn,
+  type ClassifyRequest,
+  type PrepareInput,
+  type PrepareOutcome,
+  type RunPlan,
+} from './run/prepare.ts';
 export { finalizeRun, reportRunError, type FinalizeInput } from './run/finalize.ts';

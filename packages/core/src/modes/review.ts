@@ -29,6 +29,8 @@ const VERDICT_LABEL: Record<ReviewOutput['verdict'], string> = {
 /** Auto-review mode: analyze the PR diff and post a review with inline findings. */
 export const reviewMode: ModeDefinition<ReviewOutput> = {
   name: 'review',
+  description:
+    'Review the pull request diff and post inline findings with a verdict. Choose this when the user asks to review, re-review, take another look at, or give feedback on the pull request or its changes.',
   outputSchema: ReviewOutputSchema,
   tools: ['comment', 'review'],
   async finalize(ctx) {

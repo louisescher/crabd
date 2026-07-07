@@ -21,6 +21,8 @@ export type MentionOutput = v.InferOutput<typeof MentionOutputSchema>;
  */
 export const mentionMode: ModeDefinition<MentionOutput> = {
   name: 'mention',
+  description:
+    'Answer a question or handle a free-form request about the code or discussion. The default when the user is asking something rather than clearly requesting a code review or an implementation.',
   outputSchema: MentionOutputSchema,
   tools: ['comment', 'commit'],
   async finalize(ctx) {

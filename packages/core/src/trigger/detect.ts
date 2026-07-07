@@ -10,6 +10,14 @@ export interface TriggerResult {
    * Threaded into every mode so `/crabd review focus on the migration` actually steers.
    */
   userInstruction?: string;
+  /**
+   * True when the mode was determined unambiguously — a mode keyword in the mention
+   * (`/crabd review`) or an event that maps to exactly one mode (a PR opened → review).
+   * False only for a bare mention that fell back to `mention`: the caller may run a cheap
+   * classifier to route it to the mode the user actually meant ("please review again" →
+   * review) instead of answering with a single comment. See {@link prepareRun}.
+   */
+  explicit: boolean;
 }
 
 export interface DetectOptions {
@@ -66,6 +74,8 @@ export function detectTrigger(event: ForgeEvent, options: DetectOptions): Trigge
     const { mode, instruction } = splitModeKeyword(rest, options.knownModes ?? options.enabledModes);
     return gate({
       mode: mode ?? 'mention',
+      // A matched keyword is an explicit choice; a bare mention is not and may be classified.
+      explicit: mode !== undefined,
       userInstruction: instruction.length > 0 ? instruction : undefined,
     });
   }
@@ -74,14 +84,14 @@ export function detectTrigger(event: ForgeEvent, options: DetectOptions): Trigge
     // Review on open / reopen / un-draft only — not `synchronize` (a push to the PR).
     // To re-review after changes, mention `/crabd review`.
     if (['opened', 'reopened', 'ready_for_review'].includes(event.action)) {
-      return gate({ mode: 'review' });
+      return gate({ mode: 'review', explicit: true });
     }
     return null;
   }
 
   if (event.kind === 'issues') {
     if (['opened', 'assigned', 'labeled'].includes(event.action)) {
-      return gate({ mode: 'implement' });
+      return gate({ mode: 'implement', explicit: true });
     }
     return null;
   }

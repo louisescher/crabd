@@ -13,6 +13,7 @@ import {
   registerMode,
   renderRateLimitExhausted,
   reportRunError,
+  type ClassifyRequest,
   type FailureKind,
   type ForgeEvent,
   type ModeDefinition,
@@ -118,6 +119,51 @@ function runFlueTurn(mode: string, message: string, images: string[]): CrabdTurn
 }
 
 /**
+ * Classify a bare mention's intent with a cheap `crabd-classify` turn. Returns the chosen
+ * mode, or `undefined` on any failure — the caller then keeps the default `mention`. This is
+ * the `ClassifyFn` prepareRun calls; it runs a separate low-thinking, no-tools model pass.
+ */
+function runFlueClassify(request: ClassifyRequest): { mode: string } | undefined {
+  try {
+    const stdout = execFileSync(
+      process.execPath,
+      [flueCliEntry(), 'run', 'workflow:crabd-classify', '--input', JSON.stringify(request)],
+      { cwd: ACTION_DIR, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: 8 * 1024 * 1024 },
+    );
+    const trimmed = stdout.trim();
+    if (!trimmed) return undefined;
+    const parsed = JSON.parse(trimmed) as { mode?: string };
+    return parsed.mode ? { mode: parsed.mode } : undefined;
+  } catch (error) {
+    log(`classify failed, keeping mention: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
+}
+
+/**
+ * Register the model providers with the Flue subprocesses via env (read by app.ts): user-defined
+ * custom providers and any egress-gateway routing. Independent of the mode, so it is applied
+ * before prepareRun — the classify pass needs it too, and it runs inside prepareRun.
+ */
+function applyProviderEnv(config: {
+  providers: { custom: { id: string }[]; allowlist: string[]; gatewayUrl?: string | null };
+}): void {
+  if (config.providers.custom.length > 0) {
+    process.env.CRABD_CUSTOM_PROVIDERS = JSON.stringify(config.providers.custom);
+  }
+  // Egress gateway: route allowlisted built-in providers through `${gateway}/<provider>`.
+  // Custom providers (own base_url) and ollama are excluded.
+  if (config.providers.gatewayUrl) {
+    const customIds = new Set(config.providers.custom.map((p) => p.id));
+    const gatewayProviders = config.providers.allowlist.filter((id) => !customIds.has(id) && id !== 'ollama');
+    if (gatewayProviders.length > 0) {
+      process.env.CRABD_GATEWAY_URL = config.providers.gatewayUrl;
+      process.env.CRABD_GATEWAY_PROVIDERS = JSON.stringify(gatewayProviders);
+    }
+  }
+}
+
+/**
  * Exhaustion behavior when every model in the chain was rate-limited: an explicit
  * `on_exhausted` config wins; otherwise the per-mode default — `review` soft-finishes
  * (green, so a transient limit doesn't block PRs), other modes fail the check.
@@ -180,7 +226,14 @@ async function main(): Promise<number> {
     delete config.repos.read;
   }
 
-  const outcome = await prepareRun({ adapter, config, event, cwd });
+  // Wiring the classify pass needs before prepareRun runs it: providers must be registered so
+  // the subprocess can reach the model, the model to use (the primary — the main turn overwrites
+  // CRABD_MODEL below with the per-mode model), and the checkout for its sandbox.
+  applyProviderEnv(config);
+  process.env.CRABD_MODEL = config.model;
+  process.env.CRABD_CWD = cwd;
+
+  const outcome = await prepareRun({ adapter, config, event, cwd, classify: async (req) => runFlueClassify(req) });
   if (outcome.status === 'skip') {
     log(`skip: ${outcome.reason}`);
     return 0;
@@ -202,19 +255,8 @@ async function main(): Promise<number> {
   process.env.CRABD_CWD = cwd;
   if (config.limits.maxTurns) process.env.CRABD_MAX_TURNS = String(config.limits.maxTurns);
   if (extensionPath) process.env.CRABD_EXTENSION_PATH = extensionPath;
-  if (config.providers.custom.length > 0) {
-    process.env.CRABD_CUSTOM_PROVIDERS = JSON.stringify(config.providers.custom);
-  }
-  // Egress gateway: route allowlisted built-in providers through `${gateway}/<provider>`.
-  // Custom providers (own base_url) and ollama are excluded.
-  if (config.providers.gatewayUrl) {
-    const customIds = new Set(config.providers.custom.map((p) => p.id));
-    const gatewayProviders = config.providers.allowlist.filter((id) => !customIds.has(id) && id !== 'ollama');
-    if (gatewayProviders.length > 0) {
-      process.env.CRABD_GATEWAY_URL = config.providers.gatewayUrl;
-      process.env.CRABD_GATEWAY_PROVIDERS = JSON.stringify(gatewayProviders);
-    }
-  }
+  // Provider registration env (custom providers + egress gateway) was already applied before
+  // prepareRun (the classify pass needs it) — see applyProviderEnv above.
   if (config.mcp.length > 0) process.env.CRABD_MCP = JSON.stringify(config.mcp);
   process.env.CRABD_WEB_SEARCH = JSON.stringify(config.webSearch);
   // Branding for the comments the turn subprocess posts (progress + rate-limit updates).
