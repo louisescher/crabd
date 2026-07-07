@@ -129,3 +129,44 @@ describe('assemblePrompt — operating-environment note', () => {
     expect(instructions).not.toContain('single checked-out repository');
   });
 });
+
+/** Assemble the review-mode instructions at a given strictness level. */
+function reviewInstructions(strictness: number, override?: string): string {
+  const cfg = {
+    prompt: { instructions: '', ...(override ? { override } : {}) },
+    modes: {},
+    review: { commentOnly: false, strictness },
+  } as unknown as ResolvedConfig;
+  return assemblePrompt({ mode: 'review', config: cfg, context, event, trigger: { mode: 'review', explicit: true } })
+    .instructions;
+}
+
+describe('assemblePrompt — review strictness', () => {
+  it('uses the lenient guidance at level 1', () => {
+    const instructions = reviewInstructions(1);
+    expect(instructions).toContain("You are crab'd, an autonomous code reviewer.");
+    expect(instructions).toContain('block a merge');
+    expect(instructions).toContain('approve readily');
+  });
+
+  it('uses the default high-signal guidance at level 2', () => {
+    expect(reviewInstructions(2)).toContain('high-signal findings over exhaustive nitpicking');
+  });
+
+  it('uses the pedantic guidance at level 5', () => {
+    const instructions = reviewInstructions(5);
+    expect(instructions).toContain('Review pedantically');
+    expect(instructions).toContain('"no issues found" as a last resort');
+  });
+});
+
+describe('assemblePrompt — voice note', () => {
+  it('appends the anti-glazing voice note to a built-in prompt', () => {
+    expect(assemble()).toContain('Voice: write plainly and directly');
+    expect(reviewInstructions(2)).toContain('do not open with praise or congratulations');
+  });
+
+  it('omits the voice note when the prompt is fully overridden', () => {
+    expect(reviewInstructions(2, 'Custom base prompt.')).not.toContain('Voice: write plainly and directly');
+  });
+});

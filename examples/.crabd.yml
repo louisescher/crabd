@@ -40,6 +40,13 @@ context:
 #       token_env: NPM_TOKEN
 #   # env: [SOME_OTHER_TOKEN] # only for non-registry secrets a task needs
 
+# PR review behavior. comment_only keeps crab'd from approving/blocking (comment only).
+# strictness (1–5, default 2) tunes how hard it hones in: 1 flags only merge-blockers,
+# 5 is maximally nitpicky and slow to approve. Turn it up if reviews are too lenient.
+review:
+  comment_only: false
+  strictness: 2 # 1 lenient … 5 nitpicky
+
 prompt:
   instructions: |
     - Match the existing code style and conventions.

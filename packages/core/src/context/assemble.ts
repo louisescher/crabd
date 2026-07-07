@@ -4,18 +4,12 @@ import type { ProjectContext } from './project.ts';
 import { TRACKING_MARKER } from '../report/tracking.ts';
 import type { TriggerResult } from '../trigger/detect.ts';
 
-/** Built-in base system prompt per built-in mode. Overridable via full prompt override. */
+/** Built-in base system prompt per non-review built-in mode. Overridable via full prompt override. */
 const BASE_PROMPTS: Record<string, string> = {
   mention: [
     "You are crab'd, an autonomous coding agent responding to a mention on a code forge.",
     'Answer the request directly. If code changes are warranted, make them and commit to a branch.',
     'Be concise and act; do not ask for confirmation you can reasonably infer.',
-  ].join('\n'),
-  review: [
-    "You are crab'd, an autonomous code reviewer.",
-    'Review the pull request diff for correctness, security, and clarity. Prefer a small number of high-signal findings over exhaustive nitpicking.',
-    'Post a concise summary and, where useful, specific inline findings.',
-    'Pick a verdict: APPROVE when it is good to merge (LGTM), COMMENT when only minor nits remain, REQUEST_CHANGES when findings should be addressed before merging.',
   ].join('\n'),
   implement: [
     "You are crab'd, an autonomous coding agent implementing an issue end-to-end.",
@@ -24,7 +18,45 @@ const BASE_PROMPTS: Record<string, string> = {
   ].join('\n'),
 };
 
+/**
+ * The review guidance line, keyed by strictness (`review.strictness`, 1–5). It replaces a single
+ * fixed line: `1` flags only merge-blockers, `2` (default) is high-signal-over-nitpicking, and
+ * `3`–`5` progressively lower the bar for a finding, push crab'd to keep looking rather than
+ * conclude "no issues," and make it more reluctant to hand out a clean APPROVE.
+ */
+const REVIEW_STRICTNESS_GUIDANCE: Record<number, string> = {
+  1: 'Flag only issues that would break correctness or security, or otherwise block a merge. Ignore style, naming, and other minor concerns, and approve readily when nothing is broken.',
+  2: 'Prefer a small number of high-signal findings over exhaustive nitpicking, focusing on correctness, security, and clarity.',
+  3: 'Report minor issues too — edge cases, error handling, missing tests, and unclear naming — not just high-signal ones. Do not approve simply because nothing major stands out.',
+  4: 'Review strictly: actively hunt for problems across correctness, security, clarity, naming, test coverage, and docs. Keep digging rather than concluding early that there is nothing to flag, and be reluctant to APPROVE while addressable findings remain.',
+  5: 'Review pedantically: flag anything that could be improved, including style, naming, formatting, and micro-level concerns. Treat "no issues found" as a last resort — assume there is something worth raising and look until you find it. Reserve APPROVE for changes with genuinely nothing to note.',
+};
+const DEFAULT_REVIEW_STRICTNESS = 2;
+
+/** Build the review base prompt, with the middle guidance line set by the strictness level. */
+function reviewPrompt(strictness: number): string {
+  const guidance = REVIEW_STRICTNESS_GUIDANCE[strictness] ?? REVIEW_STRICTNESS_GUIDANCE[DEFAULT_REVIEW_STRICTNESS];
+  return [
+    "You are crab'd, an autonomous code reviewer.",
+    `Review the pull request diff for correctness, security, and clarity. ${guidance}`,
+    'Post a concise summary and, where useful, specific inline findings.',
+    'Pick a verdict: APPROVE when it is good to merge (LGTM), COMMENT when only minor nits remain, REQUEST_CHANGES when findings should be addressed before merging.',
+  ].join('\n');
+}
+
 const GENERIC_BASE = "You are crab'd, an autonomous coding agent operating on a code forge.";
+
+/**
+ * Voice guidance appended to every built-in base prompt: crab'd's user-facing text (review
+ * summaries, comment replies, PR descriptions) should read plainly and match a direct, technical
+ * style rather than glazing. (Skipped when the prompt is fully overridden — that caller owns the
+ * whole base.)
+ */
+const VOICE_NOTE = [
+  'Voice: write plainly and directly, in a technical, no-frills style.',
+  'State what you found and why it matters — do not open with praise or congratulations, and skip filler like "Great work!" or "This looks solid."',
+  'Do not soften or pad your points to seem agreeable. If something is fine, say so briefly, without flattery.',
+].join(' ');
 
 /**
  * The default operating-environment note appended to every built-in base prompt. It keeps the
@@ -60,8 +92,9 @@ function environmentNote(repos: ResolvedConfig['repos'] | undefined, forge: stri
   ].join(' ');
 }
 
-function baseInstructions(mode: string, repos: ResolvedConfig['repos'] | undefined, forge: string): string {
-  return `${BASE_PROMPTS[mode] ?? GENERIC_BASE}\n${environmentNote(repos, forge)}`;
+function baseInstructions(mode: string, config: ResolvedConfig, forge: string): string {
+  const base = mode === 'review' ? reviewPrompt(config.review.strictness) : (BASE_PROMPTS[mode] ?? GENERIC_BASE);
+  return `${base}\n${VOICE_NOTE}\n${environmentNote(config.repos, forge)}`;
 }
 
 export interface AssembledPrompt {
@@ -179,7 +212,7 @@ function renderProjectContext(project: ProjectContext | undefined): string[] {
 export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
   const { mode, config, context, event, trigger, project } = options;
 
-  const base = config.prompt.override ?? baseInstructions(mode, config.repos, event.forge);
+  const base = config.prompt.override ?? baseInstructions(mode, config, event.forge);
   const appends = [config.prompt.instructions, config.modes[mode]?.instructions].filter(
     (s): s is string => Boolean(s && s.trim()),
   );

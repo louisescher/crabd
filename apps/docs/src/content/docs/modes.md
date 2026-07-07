@@ -40,6 +40,16 @@ review:
   comment_only: true
 ```
 
+If crab'd calls PRs clean too readily, turn up `review.strictness` (a `1`–`5` scale, default `2`).
+Higher levels lower the bar for what counts as a finding, keep crab'd digging instead of concluding
+"no issues," and make it more reluctant to APPROVE. `1` flags only merge-blockers; `5` is maximally
+nitpicky.
+
+```yaml title=".crabd.yml"
+review:
+  strictness: 4
+```
+
 ## implement
 
 **Triggered by** an issue being assigned or labeled, or by a comment like `/crabd implement`.

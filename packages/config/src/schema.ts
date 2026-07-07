@@ -152,6 +152,24 @@ export const SandboxPartialSchema = v.object({
 });
 export type SandboxPartial = v.InferOutput<typeof SandboxPartialSchema>;
 
+/**
+ * How hard crab'd hones in when reviewing, on a 1–5 scale. `1` flags only merge-blocking
+ * correctness/security issues; `2` (default) is high-signal-over-nitpicking; `3`–`5` are
+ * increasingly nitpicky, lowering the bar for what counts as a finding and making crab'd
+ * slower to conclude "no issues" or to hand out a clean APPROVE. Interpreted in the review
+ * prompt (see `assemble.ts`).
+ */
+export const REVIEW_STRICTNESS_MIN = 1;
+export const REVIEW_STRICTNESS_MAX = 5;
+export const REVIEW_STRICTNESS_DEFAULT = 2;
+export const ReviewStrictnessSchema = v.pipe(
+  v.number(),
+  v.integer(),
+  v.minValue(REVIEW_STRICTNESS_MIN),
+  v.maxValue(REVIEW_STRICTNESS_MAX),
+);
+export type ReviewStrictness = v.InferOutput<typeof ReviewStrictnessSchema>;
+
 export const ReviewPartialSchema = v.object({
   /**
    * When true, crab'd posts every review as a plain COMMENT — it never formally
@@ -159,6 +177,12 @@ export const ReviewPartialSchema = v.object({
    * still computed and shown in the summary.
    */
   comment_only: v.optional(v.boolean()),
+  /**
+   * Review strictness, `1`–`5` (default `2`). Higher = more nitpicky: crab'd lowers the bar
+   * for what counts as a finding, keeps digging instead of concluding "no issues," and is
+   * more reluctant to APPROVE. `1` flags only merge-blocking issues.
+   */
+  strictness: v.optional(ReviewStrictnessSchema),
 });
 export type ReviewPartial = v.InferOutput<typeof ReviewPartialSchema>;
 
@@ -285,6 +309,7 @@ export const DEFAULT_CONFIG: CrabdConfigPartial = {
   },
   review: {
     comment_only: false,
+    strictness: REVIEW_STRICTNESS_DEFAULT,
   },
   web_search: {
     enabled: true,
