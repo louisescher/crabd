@@ -71,6 +71,31 @@ describe('ForgejoForge request shaping', () => {
     expect(calls[0]?.body).toEqual({ content: 'eyes' });
   });
 
+  it('maps Forgejo permission levels to associations (owner is Forgejo-specific)', async () => {
+    const cases: Array<[string, string]> = [
+      ['owner', 'OWNER'], // Forgejo/Gitea org owners — GitHub never returns this
+      ['admin', 'OWNER'],
+      ['write', 'COLLABORATOR'],
+      ['read', 'NONE'],
+      ['none', 'NONE'],
+    ];
+    for (const [permission, expected] of cases) {
+      mockFetch((call) => {
+        expect(call.url).toBe('https://forge.example.com/api/v1/repos/acme/app/collaborators/someone/permission');
+        return { status: 200, body: JSON.stringify({ permission }) };
+      });
+      const actor = await forge().resolveActor('someone');
+      expect(actor.association, `${permission} -> ${expected}`).toBe(expected);
+    }
+  });
+
+  it('flags [bot] logins as bots regardless of permission', async () => {
+    mockFetch(() => ({ status: 200, body: JSON.stringify({ permission: 'read' }) }));
+    const actor = await forge().resolveActor('renovate[bot]');
+    expect(actor.isBot).toBe(true);
+    expect(actor.association).toBe('NONE');
+  });
+
   it('decodes a base64 org config file', async () => {
     mockFetch(() => ({
       status: 200,

@@ -24,6 +24,9 @@ export interface ForgejoForgeOptions {
 
 function permissionToAssociation(permission: string): string {
   switch (permission) {
+    // Forgejo/Gitea emits `owner` for org owners (GitHub never does — it uses `admin`).
+    // Both are the highest access tier, so both map to OWNER.
+    case 'owner':
     case 'admin':
       return 'OWNER';
     case 'write':
