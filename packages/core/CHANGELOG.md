@@ -1,5 +1,13 @@
 # @crabd/core
 
+## 0.4.1
+
+### Patch Changes
+
+- 89c8761: Adds a way to increase how strict the reviewer is and adjusts the tone to be more neutral.
+- Updated dependencies [89c8761]
+  - @crabd/config@0.4.1
+
 ## 0.4.0
 
 ### Minor Changes
