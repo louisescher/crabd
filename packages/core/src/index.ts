@@ -26,6 +26,7 @@ export { parseGitHubEvent } from './trigger/parse-github.ts';
 // Context assembly
 export {
   assemblePrompt,
+  compressDiff,
   type AssembledPrompt,
   type AssembleOptions,
 } from './context/assemble.ts';

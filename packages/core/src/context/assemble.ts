@@ -1,5 +1,5 @@
 import type { ResolvedConfig } from '@crabd/config';
-import type { ForgeContext, ForgeEvent } from '../forge/types.ts';
+import type { ForgeChangedFile, ForgeContext, ForgeEvent } from '../forge/types.ts';
 import type { ProjectContext } from './project.ts';
 import { TRACKING_MARKER } from '../report/tracking.ts';
 import type { TriggerResult } from '../trigger/detect.ts';
@@ -108,8 +108,139 @@ function truncate(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}\n... [truncated ${text.length - max} chars]`;
 }
 
-/** Render the fetched forge context into a readable markdown block for the model. */
-function renderContext(context: ForgeContext, event: ForgeEvent): string {
+/** Char budget for the full (untoggled) diff — the historical hard clip. */
+const FULL_DIFF_BUDGET = 60_000;
+/** Global char budget for the compressed diff body. */
+const COMPRESSED_DIFF_BUDGET = 24_000;
+/** Per-file char cap in the compressed diff; larger files are clipped to the whole hunks that fit. */
+const PER_FILE_DIFF_BUDGET = 6_000;
+
+/**
+ * Low-signal files whose diff bodies are dropped from the compressed diff: lockfiles and
+ * generated/vendored/minified output. They're huge and near-useless to read line-by-line; the
+ * agent still sees them in the "Changed files" list and can open any of them with its tools.
+ */
+const LOW_SIGNAL_RULES: { reason: string; test: (path: string) => boolean }[] = [
+  {
+    reason: 'lockfile',
+    test: (p) =>
+      /(^|\/)(pnpm-lock\.yaml|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|bun\.lockb?|composer\.lock|Gemfile\.lock|poetry\.lock|Cargo\.lock|go\.sum|flake\.lock)$/.test(
+        p,
+      ) || /\.lock$/.test(p),
+  },
+  {
+    reason: 'generated',
+    test: (p) =>
+      /(^|\/)(dist|build|out|vendor|node_modules|__snapshots__)\//.test(p) || /\.(min\.(js|css)|map|snap)$/.test(p),
+  },
+];
+
+function lowSignalReason(path: string): string | undefined {
+  return LOW_SIGNAL_RULES.find((rule) => rule.test(path))?.reason;
+}
+
+function fence(body: string): string {
+  return `\`\`\`diff\n${body}\n\`\`\``;
+}
+
+/** Extract the target path from one `diff --git` section (prefers the new path). */
+function sectionPath(section: string): string | undefined {
+  const plus = section.match(/^\+\+\+ b\/(.+)$/m)?.[1];
+  if (plus && plus !== '/dev/null') return plus.trim();
+  const minus = section.match(/^--- a\/(.+)$/m)?.[1];
+  if (minus && minus !== '/dev/null') return minus.trim();
+  return section.match(/^diff --git a\/(.+) b\/(.+)$/m)?.[2]?.trim();
+}
+
+/** Split a whole unified diff into per-file sections, each starting at its `diff --git` line. */
+function splitSections(diff: string): { path: string; text: string }[] {
+  const start = diff.indexOf('diff --git ');
+  if (start === -1) return [];
+  return diff
+    .slice(start)
+    .split(/\n(?=diff --git )/)
+    .flatMap((text) => {
+      const path = sectionPath(text);
+      return path ? [{ path, text }] : [];
+    });
+}
+
+/** Keep the whole `@@` hunks of a section that fit under `cap`; report how many of how many. */
+function clipSection(text: string, cap: number): { text: string; shown: number; total: number } {
+  const firstHunk = text.indexOf('\n@@');
+  if (firstHunk === -1) return { text: truncate(text, cap), shown: 0, total: 0 };
+  const header = text.slice(0, firstHunk);
+  const hunks = text.slice(firstHunk + 1).split(/\n(?=@@ )/);
+  const kept: string[] = [];
+  let size = header.length;
+  for (const hunk of hunks) {
+    if (kept.length > 0 && size + hunk.length + 1 > cap) break;
+    kept.push(hunk);
+    size += hunk.length + 1;
+  }
+  return { text: `${header}\n${kept.join('\n')}`, shown: kept.length, total: hunks.length };
+}
+
+/**
+ * Compress a whole-PR unified diff into a high-signal, budgeted block: drop lockfiles and
+ * generated output, clip oversized files to the hunks that fit, and stop once the global budget is
+ * spent — then list what was dropped or clipped so the agent knows to read those files if it needs
+ * them. Returns the markdown that follows the `## Diff` heading (fenced diff + optional note). If
+ * the input doesn't parse as `diff --git` sections, falls back to a plain budgeted truncation.
+ */
+export function compressDiff(diff: string, changedFiles: ForgeChangedFile[]): string {
+  const sections = splitSections(diff);
+  if (sections.length === 0) return fence(truncate(diff, COMPRESSED_DIFF_BUDGET));
+
+  const byPath = new Map(changedFiles.map((f) => [f.path, f]));
+  const included: string[] = [];
+  const notes: { path: string; reason: string }[] = [];
+  let used = 0;
+
+  for (const { path, text } of sections) {
+    const low = lowSignalReason(path);
+    if (low) {
+      notes.push({ path, reason: low });
+      continue;
+    }
+    const remaining = COMPRESSED_DIFF_BUDGET - used;
+    const cap = Math.min(PER_FILE_DIFF_BUDGET, remaining);
+    if (remaining <= 0) {
+      notes.push({ path, reason: 'not shown (diff budget)' });
+      continue;
+    }
+    if (text.length <= cap) {
+      included.push(text);
+      used += text.length + 1;
+      continue;
+    }
+    const clip = clipSection(text, cap);
+    if (clip.shown === 0) {
+      notes.push({ path, reason: 'not shown (diff budget)' });
+      continue;
+    }
+    included.push(clip.text);
+    used += clip.text.length + 1;
+    if (clip.shown < clip.total) notes.push({ path, reason: `${clip.shown} of ${clip.total} hunks shown` });
+  }
+
+  const body = fence(included.join('\n'));
+  if (notes.length === 0) return body;
+
+  const list = notes
+    .map(({ path, reason }) => {
+      const f = byPath.get(path);
+      return f ? `\`${path}\` (${reason}, +${f.additions}/-${f.deletions})` : `\`${path}\` (${reason})`;
+    })
+    .join(', ');
+  return `${body}\n\n_Some files above are compressed or omitted to save space — every change is in the "Changed files" list; read a file directly if you need its full diff: ${list}._`;
+}
+
+/**
+ * Render the fetched forge context into a readable markdown block for the model. `fullDiff` (from
+ * `context.full_diff`, off by default) sends the whole diff; otherwise the diff is compressed.
+ */
+function renderContext(context: ForgeContext, event: ForgeEvent, fullDiff: boolean): string {
   const lines: string[] = [];
   lines.push(`## Repository\n${context.repo.slug} (default branch: ${context.repo.defaultBranch})`);
 
@@ -130,7 +261,8 @@ function renderContext(context: ForgeContext, event: ForgeEvent): string {
   }
 
   if (context.diff) {
-    lines.push(`## Diff\n\`\`\`diff\n${truncate(context.diff, 60_000)}\n\`\`\``);
+    const rendered = fullDiff ? fence(truncate(context.diff, FULL_DIFF_BUDGET)) : compressDiff(context.diff, context.changedFiles);
+    lines.push(`## Diff\n${rendered}`);
   }
 
   if (context.comments.length > 0) {
@@ -218,7 +350,7 @@ export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
   );
   const instructions = [base, ...appends, ...renderProjectContext(project)].join('\n\n');
 
-  const parts = [renderContext(context, event)];
+  const parts = [renderContext(context, event, config.context.fullDiff)];
   if (trigger.userInstruction) {
     parts.push(`## Instruction from the user\n${trigger.userInstruction}`);
   }

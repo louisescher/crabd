@@ -109,6 +109,13 @@ export const ContextPartialSchema = v.object({
    * its file tools) when a task matches — progressive disclosure, no skill body preloaded.
    */
   skills: v.optional(v.boolean()),
+  /**
+   * Embed the entire PR diff in the prompt. Off by default: crab'd sends a compressed,
+   * high-signal diff (low-signal files like lockfiles and generated output dropped, oversized
+   * files clipped, omissions listed) so the agent spends fewer turns exploring. Turn this on
+   * to send the full diff instead — the agent can always read any omitted file with its tools.
+   */
+  full_diff: v.optional(v.boolean()),
 });
 export type ContextPartial = v.InferOutput<typeof ContextPartialSchema>;
 
@@ -320,6 +327,9 @@ export const DEFAULT_CONFIG: CrabdConfigPartial = {
     // conventions a human's agent would follow, so crab'd honors them too.
     instruction_files: true,
     skills: true,
+    // Off by default: send a compressed diff, not the whole thing — fewer tokens, fewer
+    // exploration turns. Opt in for the full diff.
+    full_diff: false,
   },
   // Off by default: no cross-repo access, no forwarded secrets. Both are opt-in and
   // governance-lockable, since they put credentials / other repos in front of the model.
