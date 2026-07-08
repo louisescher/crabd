@@ -1,5 +1,11 @@
 # @crabd/config
 
+## 0.5.0
+
+### Minor Changes
+
+- 45aa43e: Send a compressed, high-signal PR diff by default — low-signal files (lockfiles, generated/minified/vendored output) are dropped, oversized files are clipped to the hunks that fit, and omissions are listed so the agent can read a file directly if needed. This cuts prompt size and exploration turns. The full diff is available via the new `context.full_diff` toggle (off by default).
+
 ## 0.4.1
 
 ### Patch Changes
