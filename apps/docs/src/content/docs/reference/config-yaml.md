@@ -118,6 +118,7 @@ full behavior.
 | --- | --- | --- | --- |
 | `instruction_files` | `boolean` | `true` | Load `AGENTS.md`, then `CLAUDE.md`, from the checkout root and append them to the system prompt (after crab'd's base + `prompt.instructions`, so core rules stay authoritative). Both are read; identical content is included once, differing content is labeled per file. Combined text is capped at 40k chars. |
 | `skills` | `boolean` | `true` | Discover skills under `.agents/skills/` and `.claude/skills/` and list each skill's `name` + `description` in the prompt. The agent reads a skill's `SKILL.md` itself when a task matches — the body is never preloaded. A skill with no description is skipped; a skill in both roots is listed once. |
+| `full_diff` | `boolean` | `false` | Embed the entire PR diff in the prompt. Off by default: crab'd sends a **compressed** diff instead — low-signal files (lockfiles, generated/minified/vendored output) are dropped, oversized files are clipped to the hunks that fit, and everything omitted is listed so the agent can read a file directly if it needs to. This keeps prompts small and cuts the exploration turns the agent would otherwise spend. Turn it on to send the full diff (clipped only at a 60k-char ceiling). |
 
 ## `repos`
 

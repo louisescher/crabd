@@ -54,8 +54,8 @@ export interface ResolvedConfig {
   appearance: { name: string; emoji: string; footer: boolean };
   review: { commentOnly: boolean; strictness: number };
   webSearch: { enabled: boolean; maxResults: number };
-  /** Which repo-authored context (instruction files, skills) crab'd pulls into the prompt. */
-  context: { instructionFiles: boolean; skills: boolean };
+  /** Which repo-authored context (instruction files, skills) crab'd pulls into the prompt, plus whether to send the full diff (vs. a compressed one). */
+  context: { instructionFiles: boolean; skills: boolean; fullDiff: boolean };
   /** Cross-repo READ access exposed to the model via a scoped token in its shell (off by default). */
   repos: { read?: 'all' | string[] };
   /** Extra sandbox environment: forwarded env-var names + managed `.npmrc` registries. */
@@ -246,6 +246,7 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
   const instructionFiles =
     pickScalar('context.instruction_files', (c) => c.context?.instruction_files, layers, locked) ?? true;
   const skillsEnabled = pickScalar('context.skills', (c) => c.context?.skills, layers, locked) ?? true;
+  const fullDiff = pickScalar('context.full_diff', (c) => c.context?.full_diff, layers, locked) ?? false;
 
   // Cross-repo read access + extra sandbox env are value-lists replaced by the highest
   // contributing layer (like providers.allowlist). Both are governance-lockable per exact path
@@ -280,7 +281,7 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
     appearance: { name: appearanceName, emoji: appearanceEmoji, footer: appearanceFooter },
     review: { commentOnly, strictness },
     webSearch: { enabled: webSearchEnabled, maxResults: webSearchMax },
-    context: { instructionFiles, skills: skillsEnabled },
+    context: { instructionFiles, skills: skillsEnabled, fullDiff },
     repos: { ...(reposRead !== undefined ? { read: reposRead } : {}) },
     sandbox: { env: sandboxEnv, npmrc: sandboxNpmrc },
     prompt: {
