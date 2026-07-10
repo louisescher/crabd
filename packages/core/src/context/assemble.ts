@@ -115,6 +115,17 @@ const COMPRESSED_DIFF_BUDGET = 24_000;
 /** Per-file char cap in the compressed diff; larger files are clipped to the whole hunks that fit. */
 const PER_FILE_DIFF_BUDGET = 6_000;
 
+// Char budgets for the free-text bodies in the context message. Each is re-sent on every turn of the
+// agentic loop (and re-paid uncached on providers without prompt caching), so a pasted log or a huge
+// PR description shouldn't ride along 40×. Budgets sit well above normal prose; these bodies aren't
+// recoverable via the agent's file tools, so truncation is generous and clearly noted.
+/** Char budget for the PR/issue description. */
+const SUBJECT_BODY_BUDGET = 6_000;
+/** Char budget for the comment that triggered the run (usually the user's ask). */
+const TRIGGER_COMMENT_BUDGET = 4_000;
+/** Per-comment char budget within the recent-comments list. */
+const COMMENT_BODY_BUDGET = 2_000;
+
 /**
  * Low-signal files whose diff bodies are dropped from the compressed diff: lockfiles and
  * generated/vendored/minified output. They're huge and near-useless to read line-by-line; the
@@ -247,7 +258,8 @@ function renderContext(context: ForgeContext, event: ForgeEvent, fullDiff: boole
   const subject = context.pullRequest ?? context.issue;
   if (subject) {
     const kind = context.pullRequest ? 'Pull Request' : 'Issue';
-    lines.push(`## ${kind} #${subject.number}: ${subject.title}\n${subject.body || '(no description)'}`);
+    const body = subject.body ? truncate(subject.body, SUBJECT_BODY_BUDGET) : '(no description)';
+    lines.push(`## ${kind} #${subject.number}: ${subject.title}\n${body}`);
   }
   if (context.pullRequest) {
     lines.push(`Head: \`${context.pullRequest.headRef}\` → Base: \`${context.pullRequest.baseRef}\``);
@@ -265,14 +277,17 @@ function renderContext(context: ForgeContext, event: ForgeEvent, fullDiff: boole
     lines.push(`## Diff\n${rendered}`);
   }
 
-  if (context.comments.length > 0) {
+  // The triggering comment is rendered in full under its own header below; drop it here so it isn't
+  // sent twice when it's also present in the fetched comment list.
+  const triggerId = event.comment?.id;
+  const recentComments = context.comments.slice(-10).filter((c) => c.id !== triggerId);
+  if (recentComments.length > 0) {
     // Label crab'd's own prior replies so the model has conversational continuity.
-    const recent = context.comments
-      .slice(-10)
+    const recent = recentComments
       .map((c) => {
         const isCrabd = c.body.includes(TRACKING_MARKER);
         const who = isCrabd ? "crab'd (you, earlier)" : c.author;
-        const body = c.body.split(TRACKING_MARKER).join('').trim();
+        const body = truncate(c.body.split(TRACKING_MARKER).join('').trim(), COMMENT_BODY_BUDGET);
         return `**${who}:** ${body}`;
       })
       .join('\n\n');
@@ -280,7 +295,7 @@ function renderContext(context: ForgeContext, event: ForgeEvent, fullDiff: boole
   }
 
   if (event.comment) {
-    lines.push(`## Triggering comment (by ${event.comment.author})\n${event.comment.body}`);
+    lines.push(`## Triggering comment (by ${event.comment.author})\n${truncate(event.comment.body, TRIGGER_COMMENT_BUDGET)}`);
   }
 
   return lines.join('\n\n');
