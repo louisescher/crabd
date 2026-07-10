@@ -280,3 +280,71 @@ describe('assemblePrompt — diff toggle', () => {
     expect(message).not.toContain('compressed or omitted'); // no compression note
   });
 });
+
+// --- Bounded & deduped context bodies --------------------------------------
+
+const issue: ForgeContext['issue'] = {
+  number: 7,
+  title: 'Fix it',
+  body: 'the description',
+  author: 'dev',
+  labels: [],
+  state: 'open',
+};
+
+/** Assemble just the user `message`, over a base issue context, with per-test context/event overrides. */
+function messageWith(over: { context?: Partial<ForgeContext>; event?: Partial<ForgeEvent> } = {}): string {
+  const ctx = { repo, comments: [], changedFiles: [], issue, ...over.context } as ForgeContext;
+  const evt = { ...event, ...over.event } as ForgeEvent;
+  return assemblePrompt({ mode: 'mention', config, context: ctx, event: evt, trigger: { mode: 'mention', explicit: true } }).message;
+}
+
+describe('renderContext — bounded & deduped bodies', () => {
+  it('truncates an oversized PR/issue body and notes it', () => {
+    const out = messageWith({ context: { issue: { ...issue, body: 'B'.repeat(6_500) } } });
+    expect(out).toContain('[truncated');
+    expect(out).not.toContain('B'.repeat(6_100)); // full body not carried through
+  });
+
+  it('leaves a short body unchanged and renders (no description) for an empty body', () => {
+    const short = messageWith({ context: { issue: { ...issue, body: 'short body' } } });
+    expect(short).toContain('short body');
+    expect(short).not.toContain('[truncated');
+
+    const empty = messageWith({ context: { issue: { ...issue, body: '' } } });
+    expect(empty).toContain('(no description)');
+    expect(empty).not.toContain('[truncated');
+  });
+
+  it('truncates an oversized triggering comment', () => {
+    const out = messageWith({ event: { comment: { id: 99, author: 'dev', body: 'T'.repeat(4_500), createdAt: '' } } });
+    expect(out).toContain('## Triggering comment');
+    expect(out).toContain('[truncated');
+    expect(out).not.toContain('T'.repeat(4_100));
+  });
+
+  it('truncates an oversized recent comment', () => {
+    const out = messageWith({ context: { comments: [{ id: 1, author: 'dev', body: 'R'.repeat(2_500), createdAt: '' }] } });
+    expect(out).toContain('## Recent comments');
+    expect(out).toContain('[truncated');
+    expect(out).not.toContain('R'.repeat(2_100));
+  });
+
+  it('renders the triggering comment once, never duplicated in recent comments', () => {
+    const trigger = { id: 42, author: 'dev', body: 'PLEASE-REVIEW-THIS', createdAt: '' };
+    const out = messageWith({
+      context: { comments: [{ id: 1, author: 'a', body: 'earlier note', createdAt: '' }, trigger] },
+      event: { comment: trigger },
+    });
+    expect(out).toContain('## Triggering comment');
+    expect(out.split('PLEASE-REVIEW-THIS').length - 1).toBe(1); // body appears exactly once
+    expect(out).toContain('earlier note'); // the non-trigger comment still shows
+  });
+
+  it('omits Recent comments entirely when the only comment is the trigger', () => {
+    const trigger = { id: 42, author: 'dev', body: 'only the trigger', createdAt: '' };
+    const out = messageWith({ context: { comments: [trigger] }, event: { comment: trigger } });
+    expect(out).not.toContain('## Recent comments');
+    expect(out).toContain('## Triggering comment');
+  });
+});
