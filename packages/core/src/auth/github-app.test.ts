@@ -36,4 +36,15 @@ describe('GitHubAppAuth.mintScopedToken', () => {
     expect(authCalls.at(-1)?.repositoryNames).toBeUndefined();
     expect(authCalls.at(-1)?.permissions).toEqual({ contents: 'read', metadata: 'read' });
   });
+
+  it('adds packages:read only when requested (for a GitHub Packages .npmrc fallback)', async () => {
+    authCalls.length = 0;
+    const auth = new GitHubAppAuth({ appId: 1, privateKey: PEM, installationId: 42 });
+
+    await auth.mintScopedToken({ packagesRead: true });
+    expect(authCalls.at(-1)?.permissions).toEqual({ contents: 'read', metadata: 'read', packages: 'read' });
+
+    await auth.mintScopedToken({ packagesRead: false });
+    expect(authCalls.at(-1)?.permissions).toEqual({ contents: 'read', metadata: 'read' });
+  });
 });

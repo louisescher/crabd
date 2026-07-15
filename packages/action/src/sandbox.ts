@@ -64,3 +64,30 @@ export function renderNpmrc(registries: ResolvedNpmRegistry[], fallbackTokenEnv:
   }
   return lines.length > 0 ? lines.join('\n') + '\n' : '';
 }
+
+/** A configured private registry paired with whether its auth token actually resolved in the sandbox. */
+export interface NpmrcAuthStatus extends ResolvedNpmRegistry {
+  /** True when the token this registry authenticates with is present in the sandbox env. */
+  authed: boolean;
+}
+
+/**
+ * Advisory the CLI appends to the agent's instructions so it knows, before it starts, which private
+ * registries are usable. Without this the agent rediscovers a missing token the hard way — the exact
+ * failure that burned a whole review's tool budget on 401/403 retries. Returns `''` when there are no
+ * registries (nothing worth saying) so the caller can skip appending.
+ */
+export function renderNpmrcAdvisory(statuses: NpmrcAuthStatus[]): string {
+  if (statuses.length === 0) return '';
+  const lines = statuses.map((s) => {
+    const where = s.scope ? `\`${s.scope}\` packages (${s.registry})` : s.registry;
+    if (s.authed) {
+      return `- ${where}: authenticated — you may install these packages.`;
+    }
+    const why = s.tokenEnv
+      ? `its auth token (env \`${s.tokenEnv}\`) is not available in this sandbox`
+      : `no forge token was exposed for it`;
+    return `- ${where}: NOT authenticated — ${why}, so \`npm\`/\`pnpm install\` of these packages will fail with 401/403. Do not try to install, build, or test packages that depend on them; review them from source instead.`;
+  });
+  return `Sandbox private-registry status (read this before running any install):\n${lines.join('\n')}`;
+}

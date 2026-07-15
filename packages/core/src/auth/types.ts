@@ -15,11 +15,14 @@ export interface AuthProvider {
   /**
    * Mint a **read-only** token to expose in the model's sandbox so it can read *other*
    * repositories (via `gh`/`git`). `repositoryNames` scopes the token to those repos (names
-   * within the token's account); omit for the installation's full scope. Optional: strategies
-   * that can't scope a token (a supplied static token / the single-repo broker) don't implement
-   * it, and the caller falls back (expose the static token as-is, or skip). Never write-scoped.
+   * within the token's account); omit for the installation's full scope. `packagesRead` adds
+   * `packages: read` so the token can authenticate GitHub Packages (`npm.pkg.github.com`) — set
+   * it only when a `.npmrc` entry relies on the forge token, to keep least privilege otherwise.
+   * Optional: strategies that can't scope a token (a supplied static token / the single-repo
+   * broker) don't implement it, and the caller falls back (expose the static token as-is, or
+   * skip). Never write-scoped.
    */
-  mintScopedToken?(options: { repositoryNames?: string[] }): Promise<string>;
+  mintScopedToken?(options: { repositoryNames?: string[]; packagesRead?: boolean }): Promise<string>;
 }
 
 /** A pre-issued token supplied directly (CI secret / PAT / fine-grained token). */

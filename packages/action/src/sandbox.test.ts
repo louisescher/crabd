@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { ResolvedNpmRegistry } from '@crabd/config';
-import { forgeHost, gitCredentialEnv, renderNpmrc, scopedRepoNames } from './sandbox.ts';
+import {
+  forgeHost,
+  gitCredentialEnv,
+  type NpmrcAuthStatus,
+  renderNpmrc,
+  renderNpmrcAdvisory,
+  scopedRepoNames,
+} from './sandbox.ts';
 
 describe('gitCredentialEnv', () => {
   it('uses the x-access-token username for GitHub installation tokens', () => {
@@ -73,5 +80,39 @@ describe('renderNpmrc', () => {
 
   it('returns an empty string when there are no registries', () => {
     expect(renderNpmrc([], 'GH_TOKEN')).toBe('');
+  });
+});
+
+describe('renderNpmrcAdvisory', () => {
+  it('returns an empty string when there are no registries', () => {
+    expect(renderNpmrcAdvisory([])).toBe('');
+  });
+
+  it('tells the agent it may install when a registry is authenticated', () => {
+    const statuses: NpmrcAuthStatus[] = [
+      { registry: 'https://registry.npmjs.org', scope: '@example', tokenEnv: 'NPM_TOKEN', authed: true },
+    ];
+    const advisory = renderNpmrcAdvisory(statuses);
+    expect(advisory).toContain('`@example` packages (https://registry.npmjs.org)');
+    expect(advisory).toContain('authenticated — you may install');
+    expect(advisory).not.toContain('401/403');
+  });
+
+  it('warns the agent off installs and names the missing token env when not authenticated', () => {
+    const statuses: NpmrcAuthStatus[] = [
+      { registry: 'https://registry.npmjs.org', scope: '@example', tokenEnv: 'NPM_TOKEN', authed: false },
+    ];
+    const advisory = renderNpmrcAdvisory(statuses);
+    expect(advisory).toContain('NOT authenticated');
+    expect(advisory).toContain('env `NPM_TOKEN`');
+    expect(advisory).toContain('401/403');
+    expect(advisory).toContain('review them from source');
+  });
+
+  it('explains a missing forge token for a fallback (no token_env) registry', () => {
+    const statuses: NpmrcAuthStatus[] = [{ registry: 'https://npm.pkg.github.com', authed: false }];
+    const advisory = renderNpmrcAdvisory(statuses);
+    expect(advisory).toContain('no forge token was exposed for it');
+    expect(advisory).toContain('NOT authenticated');
   });
 });
