@@ -159,7 +159,7 @@ model, whose shell is network-capable, so only expose what a task needs. Governa
 | --- | --- | --- | --- |
 | `registry` | `string` | — | Registry URL, e.g. `https://npm.pkg.github.com`. |
 | `scope` | `string` | — | Optional package scope this registry serves, e.g. `@myorg`. |
-| `token_env` | `string` | — | Env-var name holding the auth token, written as `${NAME}` (expanded at runtime). The var is forwarded automatically. Omit for GitHub Packages in the same org — crab'd falls back to the exposed forge token (needs the App granted `packages: read`). |
+| `token_env` | `string` | — | Env-var name holding the auth token, written as `${NAME}` (expanded at runtime). The var is forwarded automatically. Omit for GitHub Packages in the same org — crab'd falls back to the exposed forge token (needs your **own App** granted `packages: read`; not available under the hosted broker). If the token can't be resolved, crab'd warns and tells the agent the registry is unauthenticated. |
 
 ```yaml
 # Public npm registry, private scope — needs an auth token.

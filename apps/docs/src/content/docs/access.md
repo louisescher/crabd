@@ -76,7 +76,13 @@ it to match `token_env`:
 ```
 
 **GitHub Packages, same org:** omit `token_env` and crab'd falls back to the exposed forge token — no
-extra secret — as long as your App was granted `packages: read`.
+extra secret. This needs your **own GitHub App** (`CRABD_APP_*`) granted `packages: read`: crab'd then
+mints the sandbox token with `packages: read` automatically. It does **not** work under the hosted
+broker (its `crab'd[bot]` tokens aren't packages-scoped) — there, use an explicit `token_env` instead.
+
+If a registry's token can't be resolved at run time (the `token_env` var isn't set, or the forge-token
+fallback isn't available), crab'd emits a warning **and** tells the agent that registry is
+unauthenticated so it reviews from source instead of retrying `install`s that will 401/403.
 
 If your repo already ships an `.npmrc` that references an env var, you can skip `sandbox.npmrc` and
 just forward the var with `sandbox.env`.

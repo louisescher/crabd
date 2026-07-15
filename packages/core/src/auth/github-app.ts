@@ -82,12 +82,18 @@ export class GitHubAppAuth implements AuthProvider {
    * (for `repos.read: all`). Not cached — it carries narrower permissions than
    * {@link getToken}, so it must not be shared with the write-capable adapter token.
    */
-  async mintScopedToken(options: { repositoryNames?: string[] }): Promise<string> {
+  async mintScopedToken(options: { repositoryNames?: string[]; packagesRead?: boolean }): Promise<string> {
     const installationId = await this.resolveInstallationId();
     const result = await this.auth({
       type: 'installation',
       installationId,
-      permissions: { contents: 'read', metadata: 'read' },
+      permissions: {
+        contents: 'read',
+        metadata: 'read',
+        // Needed to authenticate GitHub Packages (npm.pkg.github.com) for a forge-token .npmrc.
+        // The App must be granted this permission for it to take effect.
+        ...(options.packagesRead ? { packages: 'read' as const } : {}),
+      },
       ...(options.repositoryNames && options.repositoryNames.length > 0
         ? { repositoryNames: options.repositoryNames }
         : {}),

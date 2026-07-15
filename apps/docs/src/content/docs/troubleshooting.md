@@ -99,6 +99,14 @@ in `sandbox.env` for a non-registry secret), and that the registry URL/scope mat
 name mismatch between the step's `env`, `token_env`, and the secret is the most common cause. See
 [Cross-repo access & private registries](/access/#private-npm-registries).
 
+crab'd logs a warning when it can't resolve a registry token —
+`sandbox.npmrc: token env "NPM_TOKEN" is not set …` — and tells the agent that registry is
+unauthenticated so it reviews from source instead of thrashing on `install` retries (a missing token
+otherwise burns a whole run's tool budget on 401/403s). If you see that warning, the token never
+reached the step. Note the **forge-token fallback** (omitting `token_env` for same-org GitHub Packages)
+needs your own GitHub App with `packages: read` — it does not work under the hosted broker; use an
+explicit `token_env` there.
+
 ## Unexpected error
 
 > **crab'd** hit an error …

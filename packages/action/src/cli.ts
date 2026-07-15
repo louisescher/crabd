@@ -20,11 +20,27 @@ import {
 } from '@crabd/core';
 import { loadResolvedConfig } from './config-loader.ts';
 import { buildForge, detectForge } from './forge-factory.ts';
-import { forgeHost, gitCredentialEnv, renderNpmrc, scopedRepoNames } from './sandbox.ts';
+import {
+  forgeHost,
+  gitCredentialEnv,
+  type NpmrcAuthStatus,
+  renderNpmrc,
+  renderNpmrcAdvisory,
+  scopedRepoNames,
+} from './sandbox.ts';
 
 const ACTION_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 function log(message: string): void {
+  process.stderr.write(`[crabd] ${message}\n`);
+}
+
+/**
+ * Like {@link log}, but also surfaces the message as a GitHub Actions warning annotation (visible in
+ * the run summary, not just buried in the step log) when running under Actions.
+ */
+function warn(message: string): void {
+  if (process.env.GITHUB_ACTIONS === 'true') process.stdout.write(`::warning::[crabd] ${message}\n`);
   process.stderr.write(`[crabd] ${message}\n`);
 }
 
@@ -301,7 +317,11 @@ async function main(): Promise<number> {
       let token: string | undefined;
       if (strategy === 'app' && typeof auth.mintScopedToken === 'function') {
         const names = scopedRepoNames(config.repos.read, event.repo.name);
-        token = await auth.mintScopedToken(names ? { repositoryNames: names } : {});
+        token = await auth.mintScopedToken({
+          ...(names ? { repositoryNames: names } : {}),
+          // A .npmrc entry with no token_env authenticates GitHub Packages via this token.
+          ...(npmrcNeedsForgeToken ? { packagesRead: true } : {}),
+        });
       } else if (strategy === 'static') {
         token = await auth.getToken(); // scope is whatever the supplied token already has
       }
@@ -316,15 +336,24 @@ async function main(): Promise<number> {
     }
   }
 
-  // (c) Private registries: forward any explicit token env-vars, write a managed .npmrc, and
-  //     point npm/pnpm at it via NPM_CONFIG_USERCONFIG (never clobbering the repo's own .npmrc).
+  // (c) Private registries: forward any explicit token env-vars, write a managed .npmrc, point
+  //     npm/pnpm at it via NPM_CONFIG_USERCONFIG (never clobbering the repo's own .npmrc), and tell
+  //     the agent which registries are usable so it doesn't burn its budget on installs that 401/403.
   if (config.sandbox.npmrc.length > 0) {
+    const authStatuses: NpmrcAuthStatus[] = [];
     for (const r of config.sandbox.npmrc) {
       if (r.tokenEnv && !(r.tokenEnv in sandboxEnv)) {
         const value = process.env[r.tokenEnv];
         if (value) sandboxEnv[r.tokenEnv] = value;
-        else log(`sandbox.npmrc: token env "${r.tokenEnv}" is not set — the registry may fail to authenticate`);
+        else warn(`sandbox.npmrc: token env "${r.tokenEnv}" is not set — ${r.registry} will not authenticate; map it onto the crab'd step from a CI secret`);
       }
+      // Authed when the token this entry references is present: an explicit tokenEnv value, or the
+      // GH_TOKEN forge-token fallback from block (b) (only set under the app/static strategies).
+      const authed = r.tokenEnv ? Boolean(sandboxEnv[r.tokenEnv]) : Boolean(sandboxEnv.GH_TOKEN);
+      if (!authed && !r.tokenEnv) {
+        warn(`sandbox.npmrc: ${r.registry} relies on the forge token but none was exposed — the forge-token fallback needs the GitHub App strategy or an explicit token_env (broker-minted tokens are not packages-scoped)`);
+      }
+      authStatuses.push({ ...r, authed });
     }
     const npmrc = renderNpmrc(config.sandbox.npmrc, 'GH_TOKEN');
     if (npmrc) {
@@ -332,6 +361,9 @@ async function main(): Promise<number> {
       writeFileSync(npmrcPath, npmrc, 'utf-8');
       sandboxEnv.NPM_CONFIG_USERCONFIG = npmrcPath;
     }
+    // The turn subprocess reads CRABD_INSTRUCTIONS (set above) — append, don't overwrite.
+    const advisory = renderNpmrcAdvisory(authStatuses);
+    if (advisory) process.env.CRABD_INSTRUCTIONS = `${process.env.CRABD_INSTRUCTIONS ?? ''}\n\n${advisory}`.trim();
   }
 
   if (Object.keys(sandboxEnv).length > 0) {
