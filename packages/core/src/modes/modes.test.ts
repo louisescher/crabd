@@ -113,6 +113,46 @@ describe('review mode finalize', () => {
     expect(submission.event).toBe('COMMENT'); // never APPROVE/REQUEST_CHANGES
     expect(result.summary).toMatch(/Good to merge \(LGTM\)\./); // verdict still shown
   });
+
+  it('folds findings outside the diff into the body instead of posting them inline', async () => {
+    const adapter = fakeAdapter();
+    // Diff touches only new-side lines 1-2 of src/a.ts; line 99 is outside any hunk.
+    const diff = [
+      'diff --git a/src/a.ts b/src/a.ts',
+      '--- a/src/a.ts',
+      '+++ b/src/a.ts',
+      '@@ -1,1 +1,2 @@',
+      ' const a = 1;',
+      '+const b = 2;',
+      '',
+    ].join('\n');
+    const result = await reviewMode.finalize({
+      adapter,
+      config: resolveConfig({ layers: {} }),
+      event: baseEvent,
+      context: { ...baseContext, diff },
+      trigger: { mode: 'review', explicit: true },
+      cwd: '/tmp',
+      data: {
+        summary: 'Review.',
+        verdict: 'REQUEST_CHANGES',
+        findings: [
+          { path: 'src/a.ts', line: 2, body: 'In-diff finding.' }, // commentable
+          { path: 'src/a.ts', line: 99, body: 'Out-of-diff finding.' }, // outside any hunk
+        ],
+      },
+    });
+
+    const [, submission] = (adapter.postReview as ReturnType<typeof vi.fn>).mock.calls[0] as [number, ReviewSubmission];
+    // Only the in-diff finding is anchored inline...
+    expect(submission.comments).toHaveLength(1);
+    expect(submission.comments?.[0]?.line).toBe(2);
+    // ...and the out-of-diff one is preserved in the body, not dropped.
+    expect(submission.body).toContain('src/a.ts:99');
+    expect(submission.body).toContain('Out-of-diff finding.');
+    // The suffix counts only what actually went inline.
+    expect(result.summary).toMatch(/\(1 inline finding\)/);
+  });
 });
 
 describe('tracking comment rendering', () => {
