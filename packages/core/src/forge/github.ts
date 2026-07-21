@@ -1,6 +1,7 @@
 import { Octokit } from '@octokit/rest';
 import type { AuthProvider } from '../auth/types.ts';
 import { TRACKING_MARKER } from '../report/tracking.ts';
+import { foldCommentsIntoBody } from './review-body.ts';
 import type {
   CommitRequest,
   ForgeActor,
@@ -20,6 +21,11 @@ export interface GitHubForgeOptions {
   repo: ForgeRepo;
   /** GitHub API base URL (GitHub Enterprise). Defaults to public GitHub. */
   baseUrl?: string;
+}
+
+/** An Octokit `RequestError` carrying HTTP 422 (Unprocessable Entity). */
+function isUnprocessableEntity(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { status?: number }).status === 422;
 }
 
 /** Best-effort mapping from a repo permission level to an author-association proxy. */
@@ -171,14 +177,27 @@ export class GitHubForge implements ForgeAdapter {
 
   async postReview(prNumber: number, review: ReviewSubmission): Promise<void> {
     const gh = await this.gh();
-    await gh.pulls.createReview({
+    const base = {
       owner: this.owner,
       repo: this.name,
       pull_number: prNumber,
       body: review.body,
       event: review.event,
-      comments: review.comments?.map((c) => ({ path: c.path, line: c.line, body: c.body })),
-    });
+    };
+    const comments = review.comments ?? [];
+    try {
+      await gh.pulls.createReview({
+        ...base,
+        comments: comments.map((c) => ({ path: c.path, line: c.line, body: c.body })),
+      });
+    } catch (err) {
+      // GitHub rejects the whole review with 422 "Line could not be resolved" if any inline
+      // comment targets a line outside the diff. review mode filters these out ahead of time, but
+      // as a last resort (renames, path mismatches) retry once without inline comments, folding
+      // them into the body so the review — and its findings — still land instead of failing the run.
+      if (comments.length === 0 || !isUnprocessableEntity(err)) throw err;
+      await gh.pulls.createReview({ ...base, body: foldCommentsIntoBody(review.body, comments) });
+    }
   }
 
   /** Create a single commit containing all files via the git data API. */

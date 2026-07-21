@@ -1,5 +1,6 @@
 import type { AuthProvider } from '../auth/types.ts';
 import { TRACKING_MARKER } from '../report/tracking.ts';
+import { foldCommentsIntoBody } from './review-body.ts';
 import type {
   CommitRequest,
   ForgeActor,
@@ -178,11 +179,20 @@ export class ForgejoForge implements ForgeAdapter {
   }
 
   async postReview(prNumber: number, review: ReviewSubmission): Promise<void> {
-    await this.api('POST', `${this.prefix}/pulls/${prNumber}/reviews`, {
-      body: review.body,
-      event: review.event,
-      comments: review.comments?.map((c) => ({ path: c.path, body: c.body, new_position: c.line })),
-    });
+    const path = `${this.prefix}/pulls/${prNumber}/reviews`;
+    const comments = review.comments ?? [];
+    try {
+      await this.api('POST', path, {
+        body: review.body,
+        event: review.event,
+        comments: comments.map((c) => ({ path: c.path, body: c.body, new_position: c.line })),
+      });
+    } catch (err) {
+      // Like GitHub, Forgejo rejects the review with 422 when an inline comment points outside the
+      // diff. Retry once without inline comments, folding them into the body so the review lands.
+      if (comments.length === 0 || !/→ 422\b/.test(String(err))) throw err;
+      await this.api('POST', path, { body: foldCommentsIntoBody(review.body, comments), event: review.event });
+    }
   }
 
   async commitToBranch(request: CommitRequest): Promise<void> {

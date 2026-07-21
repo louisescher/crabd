@@ -164,7 +164,7 @@ function sectionPath(section: string): string | undefined {
 }
 
 /** Split a whole unified diff into per-file sections, each starting at its `diff --git` line. */
-function splitSections(diff: string): { path: string; text: string }[] {
+export function splitSections(diff: string): { path: string; text: string }[] {
   const start = diff.indexOf('diff --git ');
   if (start === -1) return [];
   return diff
