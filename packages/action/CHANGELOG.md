@@ -1,5 +1,13 @@
 # @crabd/action
 
+## 0.5.3
+
+### Patch Changes
+
+- Updated dependencies [44babf0]
+  - @crabd/core@0.5.3
+  - @crabd/config@0.5.3
+
 ## 0.5.2
 
 ### Patch Changes
