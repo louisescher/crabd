@@ -84,7 +84,73 @@ appearance:
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `comment_only` | `boolean` | `false` | When `true`, crab'd posts every review as a plain **comment**. It never formally approves or requests changes, so it can't approve or block a PR. The verdict is still computed and shown in the summary. |
-| `strictness` | `1`–`5` | `2` | How hard crab'd hones in. `1` flags only merge-blocking correctness/security issues; `2` (default) prefers a few high-signal findings over nitpicking; `3`–`5` progressively lower the bar for a finding, keep crab'd digging instead of concluding "no issues," and make it more reluctant to APPROVE. `5` is maximally nitpicky. |
+| `strictness` | `1`–`5` | `2` | The main dial. It sets the confidence a finding needs and which dimensions get reviewed. See below. |
+| `min_confidence` | `1`–`10` | from `strictness` | Confidence floor a finding must meet to be posted. Findings below it are dropped before the review is submitted, and reported only as an aggregate count. |
+| `max_findings` | `number` | `10` | Cap on inline findings. Findings are ranked by severity then confidence and the tail is dropped, with the count noted. |
+| `dimensions` | `string[]` | from `strictness` | Which dimensions to review along. Replaced (not merged) by the highest layer. |
+| `exclusions` | `string[]` | `[]` | Extra issue classes crab'd must never report, on top of the built-in list. **Accumulates across all layers.** |
+| `precedents` | `string[]` | `[]` | Settled rulings on recurring ambiguous cases. **Accumulates across all layers.** |
+| `verify` | object | off | Second-pass refutation of each finding. See [`review.verify`](#reviewverify). |
+
+### How `strictness` works
+
+`strictness` is not a tone knob. It sets two concrete things:
+
+| `strictness` | Confidence floor | Dimensions reviewed |
+| --- | --- | --- |
+| `1` | 9 | correctness, security |
+| `2` (default) | 7 | + concurrency-and-resources, error-handling |
+| `3` | 6 | + api-and-compatibility, test-coverage |
+| `4` | 5 | all |
+| `5` | 4 | all |
+
+Turn it **up** if reviews are too lenient, **down** if they are noisy. Set `min_confidence` or
+`dimensions` explicitly to override either half.
+
+At every level, reporting nothing is a valid outcome. crab'd is told not to manufacture findings to
+look thorough.
+
+The available dimensions are `correctness`, `security`, `concurrency-and-resources`,
+`error-handling`, `efficiency`, `duplication`, `api-and-compatibility`, `test-coverage`, and
+`repo-convention`. Each one is also a finding's `category`.
+
+### `exclusions` and `precedents`
+
+Both **accumulate** across config layers rather than being replaced, so an org can pin house rules
+and a repo can extend them without silently dropping them:
+
+```yaml
+review:
+  exclusions:
+    - Never comment on the generated client in src/api/generated/.
+  precedents:
+    - Our request IDs are opaque and need no validation.
+```
+
+crab'd already ships a built-in list of both (theoretical races, missing hardening with no concrete
+failure, formatting when a formatter owns it, "add a test" without naming the branch, and so on).
+These are added to it. Use `exclusions` to retire a false positive permanently instead of
+re-litigating it on every PR.
+
+### `review.verify`
+
+Sends each candidate finding to an independent, **blinded** refuter, a subagent that sees the claim
+and the code but not the reviewer's reasoning, and posts only what survives. This is the strongest
+available lever on false positives, and it costs one extra model call per candidate finding, so it is
+off by default.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `enabled` | `boolean` | `false` | Whether to run the refutation pass. |
+| `min_confidence` | `1`–`10` | `7` | Confidence the refuter needs for a finding to survive, on top of its verdict. |
+| `max_concurrency` | `number` | `3` | Refuters in flight at once. |
+| `model` | `string` | the review model | Model for the refuters. A cheaper model here keeps the cost down. |
+
+A refuter returns `CONFIRMED`, `REFUTED`, or `UNCERTAIN`. Only a confident `CONFIRMED` is posted. If
+a refuter fails or times out, its finding is kept, the pass removes false positives, it does not
+swallow the review when an extra call goes wrong.
+
+### Verdicts
 
 The review verdict maps to a plain-language line in the summary (and, unless `comment_only`, to the
 forge review action):
@@ -94,6 +160,9 @@ forge review action):
 | **Good to merge (LGTM)** | Approve |
 | **Nits found** | Comment |
 | **Please address the findings before merging** | Request changes |
+
+crab'd will not approve while a `blocker` or `major` finding stands. A verdict that contradicts the
+findings is downgraded to *request changes*.
 
 ## `web_search`
 

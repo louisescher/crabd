@@ -25,7 +25,14 @@ jobs:
       issues: write
       id-token: write
     steps:
+      # `ref:` matters on `issue_comment`: that event's default SHA is the base branch, so a bare
+      # checkout would leave the runner on main and crab'd would review files that don't contain
+      # the change. `refs/pull/N/merge` is the PR as it would land; for `pull_request` events the
+      # default checkout is already correct, so the expression falls through to empty.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.issue.pull_request && format('refs/pull/{0}/merge', github.event.issue.number) || '' }}
+          fetch-depth: 0
       - uses: louisescher/crabd@v0
         with:
           model: anthropic/claude-sonnet-4-6

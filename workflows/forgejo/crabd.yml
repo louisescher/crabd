@@ -17,7 +17,14 @@ jobs:
   crabd:
     runs-on: docker
     steps:
+      # `ref:` matters on `issue_comment`: that event's default SHA is the base branch, so a bare
+      # checkout would leave the runner on main and crab'd would review files that don't contain
+      # the change. For `pull_request` events the default checkout is already correct, so the
+      # expression falls through to empty. crab'd also self-corrects at runtime when it can.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.issue.pull_request && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
+          fetch-depth: 0
       - uses: https://github.com/louisescher/crabd@v0
         with:
           forge: forgejo

@@ -2,6 +2,7 @@ import type { ResolvedConfig, ThinkingLevel } from '@crabd/config';
 import { assemblePrompt } from '../context/assemble.ts';
 import { loadProjectContext } from '../context/project.ts';
 import type { ForgeAdapter, ForgeContext, ForgeEvent, TrackingComment } from '../forge/types.ts';
+import { checkoutPrHead, resolveWorkspace, type WorkspaceState } from '../git/workspace.ts';
 import { getMode, listModes } from '../modes/registry.ts';
 import { subjectNumber } from '../modes/shared.ts';
 import { assertProvidersAllowed } from '../policy/providers.ts';
@@ -26,6 +27,12 @@ export interface RunPlan {
   subject: number;
   /** Name/emoji/footer crab'd uses in comments for this run (from `config.appearance`). */
   branding: Branding;
+  /**
+   * Resolved VCS state of the checkout, after any attempt to move it onto the PR head.
+   * `matchesPrHead === false` means the agent is reading files that are not the change under
+   * review — surfaced in the prompt, and worth logging by the caller.
+   */
+  workspace?: WorkspaceState;
 }
 
 export type PrepareOutcome =
@@ -161,6 +168,20 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
   const thinkingLevel = modeCfg?.thinkingLevel ?? config.thinkingLevel;
   const toolNames = modeCfg?.tools ?? modeDef.tools;
 
+  // Make sure the checkout is the code under review before anything reads from it.
+  //
+  // On an `issue_comment` trigger (the main "@crabd review this" path) `GITHUB_SHA` is the
+  // default branch, so a plain `actions/checkout` leaves the runner on main — the agent would
+  // read one version of the repo while reviewing a diff describing another. Correct it when we
+  // can; when we can't, the mismatch rides through to the prompt so the model is told rather
+  // than left to trust the wrong files. Deliberately ordered before `loadProjectContext` so the
+  // repo's own AGENTS.md/CLAUDE.md is read from the PR head too.
+  const workspace = resolveWorkspace(cwd, context.pullRequest?.headSha || undefined);
+  if (workspace.matchesPrHead === false && context.pullRequest) {
+    const moved = checkoutPrHead(cwd, context.pullRequest.headSha, context.pullRequest.number);
+    if (moved) Object.assign(workspace, resolveWorkspace(cwd, context.pullRequest.headSha));
+  }
+
   // Repo-authored context: the target repo's own AGENTS.md/CLAUDE.md and skill manifest,
   // gated by config. Read-only and best-effort — never blocks the run.
   const project = loadProjectContext(cwd, {
@@ -175,6 +196,8 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
     event,
     trigger: resolvedTrigger,
     project,
+    workspace,
+    cwd,
   });
   const branding = config.appearance;
 
@@ -198,6 +221,7 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
       tracking,
       subject,
       branding,
+      workspace,
     },
     context,
     trigger: resolvedTrigger,

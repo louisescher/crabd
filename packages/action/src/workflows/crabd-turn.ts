@@ -1,12 +1,14 @@
 import {
   connectMcpServer,
   defineAgent,
+  defineAgentProfile,
   defineTool,
   defineWorkflow,
   observe,
   type JsonValue,
   type ToolDefinition,
 } from '@flue/runtime';
+import { readFileSync } from 'node:fs';
 import { local } from '@flue/runtime/node';
 import * as v from 'valibot';
 import {
@@ -15,7 +17,12 @@ import {
   GitHubForge,
   StaticTokenAuth,
   buildAttemptChain,
+  buildRefuterPrompt,
+  expandCommentableLines,
   getMode,
+  REFUTER_INSTRUCTIONS,
+  RefuterVerdictSchema,
+  survivesRefutation,
   registerBuiltinModes,
   registerMode,
   renderProgress,
@@ -25,7 +32,11 @@ import {
   type ForgeAdapter,
   type ForgeRepo,
   type ModeDefinition,
+  type RefuterVerdict,
+  type ReviewFinding,
+  type ReviewOutput,
   type TrackingComment,
+  type ValidateContext,
 } from '@crabd/core';
 import { loadCrabdExtension, providerOf, type ResolvedRateLimit } from '@crabd/config';
 import { webSearchTools } from '../tools/websearch.ts';
@@ -49,12 +60,26 @@ const timeoutMs = process.env.CRABD_TIMEOUT_MS ? Number(process.env.CRABD_TIMEOU
  * The agent that runs one crab'd turn. All dials are supplied via env by the CLI
  * orchestrator (which resolved them from the layered config).
  */
+/**
+ * The blinded second-opinion specialist used by the opt-in verify stage. Declared as a subagent
+ * profile so each refutation runs in its own child session — it must not inherit the reviewer's
+ * conversation, or it would just agree with reasoning it can see. Note `instructions` is
+ * profile-owned in `@flue/runtime` (an omitted field means none, never the parent's), while the
+ * sandbox boundary is inherited, which is what gives it read access to the same checkout.
+ */
+const refuter = defineAgentProfile({
+  name: 'refuter',
+  description: 'Independently tries to refute a single code-review finding.',
+  instructions: REFUTER_INSTRUCTIONS,
+});
+
 const agent = defineAgent(() => ({
   model: process.env.CRABD_MODEL ?? 'anthropic/claude-sonnet-4-6',
   instructions: process.env.CRABD_INSTRUCTIONS ?? '',
   ...(process.env.CRABD_THINKING_LEVEL ? { thinkingLevel: process.env.CRABD_THINKING_LEVEL as never } : {}),
   ...(timeoutMs && Number.isFinite(timeoutMs) ? { durability: { timeoutMs } } : {}),
   sandbox: local({ cwd: process.env.CRABD_CWD ?? process.cwd(), env: sandboxEnv() }),
+  subagents: [refuter],
 }));
 
 /** Load any custom modes contributed by a consumer's `crabd.config.ts` in this process. */
@@ -198,6 +223,74 @@ function rateLimitConfig(): ResolvedRateLimit {
   }
 }
 
+/**
+ * The resolved `review.verify` dials, passed as `CRABD_REVIEW_VERIFY`. Disabled when absent or
+ * unparseable — a malformed value must not silently start spending on extra model calls.
+ */
+interface VerifyDials {
+  enabled: boolean;
+  minConfidence: number;
+  maxConcurrency: number;
+  model?: string;
+}
+
+function verifyConfig(): VerifyDials {
+  const off: VerifyDials = { enabled: false, minConfidence: 7, maxConcurrency: 3 };
+  const raw = process.env.CRABD_REVIEW_VERIFY;
+  if (!raw) return off;
+  try {
+    const parsed = JSON.parse(raw) as Partial<VerifyDials>;
+    return {
+      enabled: parsed.enabled === true,
+      minConfidence: typeof parsed.minConfidence === 'number' ? parsed.minConfidence : off.minConfidence,
+      maxConcurrency:
+        typeof parsed.maxConcurrency === 'number' && parsed.maxConcurrency >= 1
+          ? Math.floor(parsed.maxConcurrency)
+          : off.maxConcurrency,
+      ...(typeof parsed.model === 'string' && parsed.model ? { model: parsed.model } : {}),
+    };
+  } catch {
+    return off;
+  }
+}
+
+/**
+ * The pull request diff, read from the temp file the CLI wrote.
+ *
+ * Passed by path rather than by value because the turn input is a command-line argument and the
+ * rendered message already carries a compressed diff plus the changed files' contents — a second
+ * copy of the raw diff there risks an oversized argv. Only the verify stage needs it, so it is read
+ * lazily and a failure just means refuters work from the file contents alone.
+ */
+function readDiff(): string | undefined {
+  const path = process.env.CRABD_DIFF_PATH;
+  if (!path) return undefined;
+  try {
+    return readFileSync(path, 'utf-8');
+  } catch {
+    return undefined;
+  }
+}
+
+/** Run `worker` over `items` with at most `limit` in flight. Preserves input order in the result. */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const runners = Array.from({ length: Math.min(Math.max(limit, 1), items.length) }, async () => {
+    for (;;) {
+      const index = next++;
+      if (index >= items.length) return;
+      results[index] = await worker(items[index] as T, index);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
 /** Web-search / fetch tools, unless disabled via config (passed as CRABD_WEB_SEARCH). */
 function configuredWebSearchTools(): ToolDefinition[] {
   const raw = process.env.CRABD_WEB_SEARCH;
@@ -215,6 +308,15 @@ function configuredWebSearchTools(): ToolDefinition[] {
 
 /** How long the graceful wrap-up (final-answer) prompt may run before it's abandoned. */
 const WRAP_UP_TIMEOUT_MS = 90_000;
+
+/** How long a self-correction turn may run before the original answer is kept instead. */
+const REPAIR_TIMEOUT_MS = 90_000;
+/**
+ * How many self-correction turns a mode may ask for. Two is enough for the mistakes this catches
+ * (a mis-anchored line, a path outside the diff) and low enough that a model which keeps producing
+ * the same invalid answer can't spin.
+ */
+const MAX_REPAIR_ATTEMPTS = 2;
 
 /**
  * Instruction for the wrap-up prompt. When a run reaches its soft tool-call budget, crab'd
@@ -249,6 +351,16 @@ export default defineWorkflow({
     mode: v.string(),
     message: v.string(),
     images: v.optional(v.array(v.string())),
+    /**
+     * What the mode needs to check its own output, in a form small enough to pass across the
+     * process boundary — anchorable lines as compact ranges rather than the diff a second time.
+     */
+    validation: v.optional(
+      v.object({
+        changedPaths: v.array(v.string()),
+        anchorable: v.array(v.object({ path: v.string(), ranges: v.array(v.string()) })),
+      }),
+    ),
   }),
   async run({ harness, input }) {
     await ensureCustomModes();
@@ -326,16 +438,72 @@ export default defineWorkflow({
     // same-model retries). Fallback attempts use a fresh session so a failed turn
     // isn't carried into the retry's context.
     type TurnResult = { data: JsonValue; model?: string; partial?: boolean };
+
+    // The mode's own semantic check on the answer, plus the context it needs. Absent when the CLI
+    // supplied no validation payload or the mode has nothing to check.
+    const validateContext: ValidateContext | undefined = input.validation
+      ? {
+          changedPaths: input.validation.changedPaths,
+          anchorable: expandCommentableLines(input.validation.anchorable),
+          cwd: process.env.CRABD_CWD ?? process.cwd(),
+        }
+      : undefined;
+
+    /**
+     * Give the model a bounded chance to fix an answer that is well-formed but unpostable — a
+     * finding anchored outside every hunk, a path that isn't in the diff. Runs on the *same*
+     * session so it still has everything it read, which is what makes this cheap. Entirely
+     * best-effort: any failure keeps the answer we already have rather than losing the review.
+     */
+    const repair = async (
+      session: Awaited<ReturnType<typeof harness.session>>,
+      model: string,
+      first: TurnResult,
+    ): Promise<TurnResult> => {
+      if (!mode.validate || !validateContext) return first;
+      let current = first;
+
+      for (let attempt = 0; attempt < MAX_REPAIR_ATTEMPTS; attempt++) {
+        let verdict: ReturnType<NonNullable<typeof mode.validate>>;
+        try {
+          verdict = mode.validate(current.data, validateContext);
+        } catch {
+          // A broken validator must never cost us a review.
+          return current;
+        }
+        if (verdict.ok) return current;
+
+        try {
+          const handle = session.prompt(verdict.repairPrompt, {
+            ...promptOptions,
+            model,
+            signal: AbortSignal.timeout(REPAIR_TIMEOUT_MS),
+          });
+          currentHandle = handle;
+          current = (await handle) as unknown as TurnResult;
+        } catch {
+          // Timed out, hit the turn ceiling, or the session refused — keep what we had. The
+          // finalize path still demotes anything unpostable rather than dropping it.
+          return current;
+        }
+      }
+      return current;
+    };
+
+    // The session that produced the answer, kept so the verify stage can delegate from it.
+    let lastSession: Awaited<ReturnType<typeof harness.session>> | undefined;
+
     const runOnce = async (model: string, index: number): Promise<TurnResult> => {
       currentModel = model;
       toolStarts = 0;
       abortedForMaxTurns = false;
       wrapUpRequested = false;
       const session = index === 0 ? await harness.session() : await harness.session(`crabd-fallback-${index}`);
+      lastSession = session;
       const handle = session.prompt(input.message, { ...promptOptions, model });
       currentHandle = handle;
       try {
-        return (await handle) as unknown as TurnResult;
+        return await repair(session, model, (await handle) as unknown as TurnResult);
       } catch (err) {
         // Soft budget hit (not the hard ceiling, not a rate limit): reuse the session's
         // conversation to ask for a best-effort final answer. Bounded by a timeout and fully
@@ -359,6 +527,81 @@ export default defineWorkflow({
         }
         throw err;
       }
+    };
+
+    /**
+     * The opt-in second pass: send each candidate finding to an independent, blinded refuter and
+     * keep only what survives.
+     *
+     * Every refuter runs in its own child session (`agent: 'refuter'`), so it sees the claim and the
+     * code but *not* the reviewer's reasoning — which is the whole point, since a verifier that can
+     * read the argument tends to agree with it. Entirely best-effort and additive: any failure keeps
+     * the original findings, because losing a real review to a flaky extra call is the worse outcome.
+     *
+     * Returns `undefined` when the stage didn't run, so the caller can tell "not run" from "ran and
+     * confirmed everything".
+     */
+    const verifyFindings = async (
+      data: JsonValue,
+      model: string,
+      partial: boolean,
+    ): Promise<{ data: JsonValue; confirmed: number; refuted: number } | undefined> => {
+      const cfg = verifyConfig();
+      if (!cfg.enabled || input.mode !== 'review' || !lastSession) return undefined;
+      // A partial answer already ran out of budget; spending more on verification would just make
+      // the timeout worse.
+      if (partial) return undefined;
+
+      const output = data as ReviewOutput | null;
+      const findings = output?.findings;
+      if (!Array.isArray(findings) || findings.length === 0) return undefined;
+
+      const diff = readDiff();
+      const repoSlug =
+        process.env.CRABD_REPO_OWNER && process.env.CRABD_REPO_NAME
+          ? `${process.env.CRABD_REPO_OWNER}/${process.env.CRABD_REPO_NAME}`
+          : 'this repository';
+      const verifyModel = cfg.model ?? model;
+
+      const verdicts = await mapWithConcurrency(
+        findings,
+        cfg.maxConcurrency,
+        async (finding: ReviewFinding): Promise<RefuterVerdict | undefined> => {
+          try {
+            const response = await lastSession!.task(buildRefuterPrompt(finding, { repoSlug, ...(diff ? { diff } : {}) }), {
+              agent: 'refuter',
+              result: RefuterVerdictSchema,
+              model: verifyModel,
+            });
+            return (response as { data?: RefuterVerdict }).data;
+          } catch {
+            // This finding simply goes unverified; see survivesRefutation.
+            return undefined;
+          }
+        },
+      );
+
+      const kept: ReviewFinding[] = [];
+      let refuted = 0;
+      findings.forEach((finding, i) => {
+        const verdict = verdicts[i];
+        if (survivesRefutation(verdict, cfg.minConfidence)) {
+          // A refuter that agreed but found a better line is worth listening to.
+          const line = verdict?.correctedLine;
+          kept.push(typeof line === 'number' && line > 0 ? { ...finding, line } : finding);
+          return;
+        }
+        refuted++;
+      });
+
+      if (target) {
+        const summary = `Verified ${kept.length} of ${findings.length} findings (${refuted} refuted).`;
+        await target.adapter
+          .updateTrackingComment(target.tracking, renderProgress(brand, input.mode, summary))
+          .catch(() => {});
+      }
+
+      return { data: { ...output, findings: kept } as unknown as JsonValue, confirmed: kept.length, refuted };
     };
 
     let outcome;
@@ -399,7 +642,16 @@ export default defineWorkflow({
       const meta: Record<string, JsonValue> = { modelUsed: outcome.result.model ?? outcome.model };
       if (outcome.fellBack) meta.fellBackFrom = primaryModel;
       if (outcome.result.partial) meta.partial = true;
-      return { ok: true, data: outcome.result.data, meta } as JsonValue;
+
+      let data = outcome.result.data;
+      const verified = await verifyFindings(data, outcome.result.model ?? outcome.model, outcome.result.partial === true);
+      if (verified) {
+        data = verified.data;
+        meta.verified = verified.confirmed;
+        meta.refuted = verified.refuted;
+      }
+
+      return { ok: true, data, meta } as JsonValue;
     }
 
     const error: Record<string, JsonValue> = {

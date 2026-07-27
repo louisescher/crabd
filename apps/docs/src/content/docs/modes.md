@@ -41,14 +41,29 @@ review:
 ```
 
 If crab'd calls PRs clean too readily, turn up `review.strictness` (a `1`–`5` scale, default `2`).
-Higher levels lower the bar for what counts as a finding, keep crab'd digging instead of concluding
-"no issues," and make it more reluctant to APPROVE. `1` flags only merge-blockers; `5` is maximally
-nitpicky.
+It lowers the confidence a finding needs and widens the set of dimensions reviewed. `1` flags only
+merge-blocking correctness and security issues; `4` - `5` review everything.
 
 ```yaml title=".crabd.yml"
 review:
   strictness: 4
 ```
+
+If the opposite is true and reviews are noisy, you have three levers, in order of bluntness:
+
+```yaml title=".crabd.yml"
+review:
+  strictness: 1 # raise the confidence bar, narrow the dimensions
+  exclusions:
+    - Never comment on the generated client in src/api/generated/.
+  verify:
+    enabled: true # have a blinded second pass try to refute each finding
+```
+
+`exclusions` accumulate across config layers, so retiring a recurring false positive is permanent
+rather than something you re-argue on every PR. `verify` is the strongest lever but costs an extra
+model call per candidate finding. See the [config reference](/reference/config-yaml/#review) for all
+of it.
 
 ## implement
 
