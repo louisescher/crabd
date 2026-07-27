@@ -177,6 +177,76 @@ export const ReviewStrictnessSchema = v.pipe(
 );
 export type ReviewStrictness = v.InferOutput<typeof ReviewStrictnessSchema>;
 
+/**
+ * The review dimensions crab'd can look along. Each maps to a concrete checklist of named
+ * anti-patterns in the review prompt (see `REVIEW_DIMENSIONS` in `@crabd/core`'s `assemble.ts`) —
+ * an abstract noun like "clarity" gives the model nothing to search for, a named pattern does.
+ * Doubles as the closed vocabulary for a finding's `category`.
+ */
+export const REVIEW_DIMENSIONS = [
+  'correctness',
+  'security',
+  'concurrency-and-resources',
+  'error-handling',
+  'efficiency',
+  'duplication',
+  'api-and-compatibility',
+  'test-coverage',
+  'repo-convention',
+] as const;
+export const ReviewDimensionSchema = v.picklist(REVIEW_DIMENSIONS);
+export type ReviewDimension = v.InferOutput<typeof ReviewDimensionSchema>;
+
+/**
+ * Dimensions active at each strictness level. Strictness moves *which* checklists apply (and the
+ * confidence bar, see {@link REVIEW_STRICTNESS_CONFIDENCE}) rather than just how pedantic the
+ * tone is — the old behaviour was a lone adjective per level, which models satisfy by reporting
+ * fewer things at random rather than by dropping the right things.
+ */
+export const REVIEW_STRICTNESS_DIMENSIONS: Record<number, readonly ReviewDimension[]> = {
+  1: ['correctness', 'security'],
+  2: ['correctness', 'security', 'concurrency-and-resources', 'error-handling'],
+  3: ['correctness', 'security', 'concurrency-and-resources', 'error-handling', 'api-and-compatibility', 'test-coverage'],
+  4: REVIEW_DIMENSIONS,
+  5: REVIEW_DIMENSIONS,
+};
+
+/**
+ * Confidence floor (1–10) implied by each strictness level. A finding scored below the floor is
+ * dropped in code (see `reviewMode.finalize`), not left to the model's discretion — the reference
+ * harness thresholds mechanically for exactly this reason. `review.min_confidence` overrides it.
+ */
+export const REVIEW_STRICTNESS_CONFIDENCE: Record<number, number> = { 1: 9, 2: 7, 3: 6, 4: 5, 5: 4 };
+
+export const REVIEW_MIN_CONFIDENCE_DEFAULT = 7;
+export const REVIEW_MAX_FINDINGS_DEFAULT = 10;
+
+/**
+ * The second-pass verify (refute) stage.
+ *
+ * A single generative pass has no incentive to kill its own findings — the context that produced a
+ * finding will happily rationalise it. A separate, deliberately *blinded* pass whose stated job is
+ * to refute the claim breaks that bias, and is the single biggest lever on false positives in the
+ * reference harness. It is off by default because each candidate finding costs an extra model call.
+ */
+export const ReviewVerifyPartialSchema = v.object({
+  /** Whether to run the refutation pass at all. Default `false`. */
+  enabled: v.optional(v.boolean()),
+  /**
+   * Confidence (`1`–`10`) a refuter must have in a finding for it to survive. Applied on top of the
+   * refuter's CONFIRMED/REFUTED verdict, not instead of it.
+   */
+  min_confidence: v.optional(v.pipe(v.number(), v.minValue(1), v.maxValue(10))),
+  /** How many refuters may run at once. Default `3`. */
+  max_concurrency: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
+  /** Model for the refuters (`<provider>/<model>`). Unset = the review model. */
+  model: v.optional(v.string()),
+});
+export type ReviewVerifyPartial = v.InferOutput<typeof ReviewVerifyPartialSchema>;
+
+export const REVIEW_VERIFY_MIN_CONFIDENCE_DEFAULT = 7;
+export const REVIEW_VERIFY_MAX_CONCURRENCY_DEFAULT = 3;
+
 export const ReviewPartialSchema = v.object({
   /**
    * When true, crab'd posts every review as a plain COMMENT — it never formally
@@ -185,11 +255,42 @@ export const ReviewPartialSchema = v.object({
    */
   comment_only: v.optional(v.boolean()),
   /**
-   * Review strictness, `1`–`5` (default `2`). Higher = more nitpicky: crab'd lowers the bar
-   * for what counts as a finding, keeps digging instead of concluding "no issues," and is
-   * more reluctant to APPROVE. `1` flags only merge-blocking issues.
+   * Review strictness, `1`–`5` (default `2`). Higher = more thorough: crab'd lowers the
+   * confidence bar for what counts as a finding and enables more review dimensions. `1` flags
+   * only merge-blocking correctness/security issues.
    */
   strictness: v.optional(ReviewStrictnessSchema),
+  /**
+   * Confidence floor (`1`–`10`) a finding must meet to be posted. Overrides the value implied by
+   * `strictness` (see {@link REVIEW_STRICTNESS_CONFIDENCE}). Raise it to cut false positives;
+   * lower it to see more speculative findings.
+   */
+  min_confidence: v.optional(v.pipe(v.number(), v.minValue(1), v.maxValue(10))),
+  /**
+   * Cap on inline findings per review (default `10`). Findings are ranked by severity then
+   * confidence and the tail is dropped, with the count noted — a review nobody reads to the end
+   * is worse than a shorter one.
+   */
+  max_findings: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
+  /**
+   * Which dimensions to review along. Replaced (not merged) by the highest contributing layer.
+   * Unset = the set implied by `strictness`.
+   */
+  dimensions: v.optional(v.array(ReviewDimensionSchema)),
+  /**
+   * Additional issue classes crab'd must never report, appended to the built-in list. Accumulates
+   * across ALL layers (like `instructions`), so an org can pin house rules and a repo can retire
+   * its own recurring false positives permanently instead of re-litigating them every PR.
+   */
+  exclusions: v.optional(v.array(v.string())),
+  /**
+   * Settled rulings on recurring ambiguous cases ("our env vars are trusted", "the legacy
+   * adapter is deliberately untyped"), appended to the built-in list. Accumulates across ALL
+   * layers, like {@link exclusions}.
+   */
+  precedents: v.optional(v.array(v.string())),
+  /** Second-pass refutation of each candidate finding. Off by default — it costs extra calls. */
+  verify: v.optional(ReviewVerifyPartialSchema),
 });
 export type ReviewPartial = v.InferOutput<typeof ReviewPartialSchema>;
 
@@ -317,6 +418,18 @@ export const DEFAULT_CONFIG: CrabdConfigPartial = {
   review: {
     comment_only: false,
     strictness: REVIEW_STRICTNESS_DEFAULT,
+    // min_confidence / max_findings / dimensions intentionally unset — derived from strictness
+    // unless a layer overrides them. exclusions/precedents accumulate on top of the built-ins.
+    max_findings: REVIEW_MAX_FINDINGS_DEFAULT,
+    exclusions: [],
+    precedents: [],
+    // Off by default: the quality win is real but every candidate finding costs an extra model
+    // call, and that is the consumer's bill to opt into.
+    verify: {
+      enabled: false,
+      min_confidence: REVIEW_VERIFY_MIN_CONFIDENCE_DEFAULT,
+      max_concurrency: REVIEW_VERIFY_MAX_CONCURRENCY_DEFAULT,
+    },
   },
   web_search: {
     enabled: true,

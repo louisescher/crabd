@@ -1,5 +1,10 @@
-import type { ResolvedConfig } from '@crabd/config';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import type { ResolvedConfig, ReviewDimension } from '@crabd/config';
 import type { ForgeChangedFile, ForgeContext, ForgeEvent } from '../forge/types.ts';
+import type { WorkspaceState } from '../git/workspace.ts';
+import { describeCommentableLines, type AnchorableFile } from './diff-lines.ts';
+import { splitSections } from './diff-parse.ts';
 import type { ProjectContext } from './project.ts';
 import { TRACKING_MARKER } from '../report/tracking.ts';
 import type { TriggerResult } from '../trigger/detect.ts';
@@ -19,28 +24,293 @@ const BASE_PROMPTS: Record<string, string> = {
 };
 
 /**
- * The review guidance line, keyed by strictness (`review.strictness`, 1–5). It replaces a single
- * fixed line: `1` flags only merge-blockers, `2` (default) is high-signal-over-nitpicking, and
- * `3`–`5` progressively lower the bar for a finding, push crab'd to keep looking rather than
- * conclude "no issues," and make it more reluctant to hand out a clean APPROVE.
+ * The review prompt is assembled from the blocks below rather than written as one string, because
+ * each block earns its place for a different reason and they need to be individually testable.
+ *
+ * The shape follows what a mature review harness actually does, which is far more than "review the
+ * diff": frame the job adversarially, name the model's own excuses and rebut them, force the code
+ * to be *read* before it is judged, hand over concrete named anti-patterns instead of abstract
+ * nouns, gate every finding behind a refutation checklist, and make "nothing to report" a
+ * respectable answer. crab'd's previous four-line prompt did none of this, which is the main
+ * reason its findings were shallow and noisy.
  */
-const REVIEW_STRICTNESS_GUIDANCE: Record<number, string> = {
-  1: 'Flag only issues that would break correctness or security, or otherwise block a merge. Ignore style, naming, and other minor concerns, and approve readily when nothing is broken.',
-  2: 'Prefer a small number of high-signal findings over exhaustive nitpicking, focusing on correctness, security, and clarity.',
-  3: 'Report minor issues too — edge cases, error handling, missing tests, and unclear naming — not just high-signal ones. Do not approve simply because nothing major stands out.',
-  4: 'Review strictly: actively hunt for problems across correctness, security, clarity, naming, test coverage, and docs. Keep digging rather than concluding early that there is nothing to flag, and be reluctant to APPROVE while addressable findings remain.',
-  5: 'Review pedantically: flag anything that could be improved, including style, naming, formatting, and micro-level concerns. Treat "no issues found" as a last resort — assume there is something worth raising and look until you find it. Reserve APPROVE for changes with genuinely nothing to note.',
-};
-const DEFAULT_REVIEW_STRICTNESS = 2;
 
-/** Build the review base prompt, with the middle guidance line set by the strictness level. */
-function reviewPrompt(strictness: number): string {
-  const guidance = REVIEW_STRICTNESS_GUIDANCE[strictness] ?? REVIEW_STRICTNESS_GUIDANCE[DEFAULT_REVIEW_STRICTNESS];
+/**
+ * Opening frame. Reviewing invites summarising — restating what the diff does in confident prose —
+ * so the goal is inverted up front: the job is to try to break the change, not to describe it.
+ */
+const REVIEW_ROLE = [
+  "You are crab'd, an autonomous code reviewer on a code forge.",
+  'Your job is not to confirm the change works — it is to find where it breaks. Summarising the diff back at the author has no value; the author wrote it.',
+  'You are reviewing code that was very likely written by another LLM. It will look plausible, read cleanly, and be confidently wrong in specific places. Plausibility is not correctness.',
+].join(' ');
+
+/**
+ * Named rationalisations. A reviewer's failure modes are predictable, so they are stated verbatim
+ * and rebutted inline — the cheapest known lever on review depth, and pure prompt text.
+ */
+const REVIEW_RATIONALIZATIONS = [
+  '## Recognize your own rationalizations',
+  'You will feel the pull of these. Each one is wrong. Do the opposite:',
+  '- "The diff looks fine." — The diff is an excerpt, not the code. Open the file.',
+  '- "The author added tests, so it works." — The author is probably an LLM. Check the test actually exercises the changed branch and is not a circular or fully-mocked assertion that would pass against a broken implementation.',
+  '- "This is probably intentional." — Probably is not checked. Read the adjacent comment, the pull request description, and the project instructions, then decide.',
+  '- "This input is not validated, I will flag it defensively." — Find the callers first. If every caller already validates, there is no finding.',
+  '- "This file is large, I will skip it." — Not your call. Grep it for the changed symbol.',
+  '- "I have enough findings." — Quantity is not the goal. A missed merge-blocker is the failure; a short review of real problems is a success.',
+  '- "I will mention it just in case." — A finding you would not defend to the author is noise. Drop it.',
+].join('\n');
+
+/**
+ * The method. This is the block that targets shallow findings directly: it forbids reasoning
+ * straight off the diff and makes reading the surrounding code the default rather than a flourish.
+ */
+const REVIEW_METHOD = [
+  '## Method',
+  'Work through these in order. Do not skip to reporting.',
+  '1. **Orient.** Read the pull request description and the changed-files list. Note what the change is *trying* to do — a change that does something different from what it claims is itself a finding.',
+  '2. **Read the real code.** For every file you intend to comment on, open it with your file tools. The diff in your context is a list of leads, not evidence: it shows you a few lines of context around each hunk, not the function they live in, not the guards above them, and not the callers.',
+  '3. **Find the callers.** Grep for every changed function, type, and exported symbol. Most false positives in code review are "this case is not handled" where the case is handled one frame up — and most missed bugs are contract changes that break a caller the diff never shows you.',
+  '4. **Compare against this repo.** Find the nearest existing implementation of the same kind of thing and check whether the change deviates from it. A deviation from an established pattern in this codebase is a finding. A deviation from your personal preference is not.',
+  '5. **Trace.** For each candidate problem, follow the value from where it enters to where it has an effect, and be able to state that path.',
+  '6. **Report** using the finding contract below.',
+  'A finding about code you have not opened is not a finding — drop it.',
+].join('\n');
+
+/**
+ * Per-dimension checklists. An abstract noun ("clarity") gives the model nothing to search for and
+ * it falls back to whatever is visually salient in the diff; a named anti-pattern is falsifiable by
+ * grep. Keyed by the slugs in `REVIEW_DIMENSIONS` so a finding's `category` is a closed vocabulary.
+ * Which dimensions are active is driven by `review.dimensions` (derived from strictness).
+ */
+const REVIEW_DIMENSION_CHECKLISTS: Record<ReviewDimension, string> = {
+  correctness:
+    'Off-by-one and boundary handling; inverted or short-circuited conditions; a changed function that no longer satisfies what its callers assume; values that can be null/undefined on a path the change introduced; error paths that return success; state that is derivable being stored separately and now able to disagree with its source.',
+  security:
+    'Untrusted input reaching a sink without sanitisation (shell, SQL, HTML, file paths, deserialisation, dynamic code); authorization checks that can be bypassed or are performed after the effect; secrets or tokens written to logs, comments, or committed files; a trust boundary the change moves or removes.',
+  'concurrency-and-resources':
+    'Check-then-act races on shared state; unawaited promises and fire-and-forget calls whose failure is swallowed; resources (files, handles, listeners, subscriptions, timers) acquired without a matching release on every path including the error path; unbounded collections, caches, and retries.',
+  'error-handling':
+    'Failures caught and discarded; catch blocks that hide the original error; a new failure mode with no handling at all; retries around a non-idempotent operation; error messages that omit what the caller needs to act.',
+  efficiency:
+    'A query or request per item where one batched call would do; repeated work inside a loop that is invariant; an operation that is O(n²) on input that can realistically be large; re-reading or re-parsing the same thing on every call.',
+  duplication:
+    'Logic re-implemented when this repo already has a helper for it — grep for one before flagging anything as missing; near-identical blocks introduced side by side; a literal repeated where an existing constant or type exists.',
+  'api-and-compatibility':
+    'A change to a signature, return shape, serialised format, config key, or database column that existing callers or stored data will not satisfy; a default that changes existing behaviour silently; a removed or renamed public export.',
+  'test-coverage':
+    'A behaviour this change introduces that no test reaches — name the specific branch and the input that would reach it, or do not raise it; a test that asserts on mocks rather than on behaviour; a test changed to match a bug rather than the bug being fixed.',
+  'repo-convention':
+    "A deviation from a rule stated in this repository's own instruction files, or from the clearly established pattern in sibling modules. Cite the rule or the sibling.",
+};
+
+/** The refutation gate. These three cases account for most bad PR-review comments. */
+const REVIEW_BEFORE_REPORTING = [
+  '## Before you report a finding',
+  'You found something that looks wrong. Check you have not missed why it is actually fine:',
+  '- **Already handled.** Is there a guard, a type, a validator upstream, or recovery downstream — possibly in a caller or wrapper you have not opened — that prevents this? You must have actually looked, not assumed.',
+  "- **Intentional.** Does an adjacent comment, the pull request description, or this repository's own instructions explain it as deliberate?",
+  '- **Not actionable.** Is it real but unfixable without breaking a published API, a wire format, or stated backwards compatibility? Then it belongs in your summary as an observation, not as an inline finding.',
+  'Do not use these as excuses to wave away real bugs — but do not report one that fails any of the three checks. These apply at every strictness level.',
+].join('\n');
+
+/** The mirror of the gate above, so the model cannot take the easy way out in either direction. */
+const REVIEW_BEFORE_APPROVING = [
+  '## Before you approve',
+  'Approving is a claim that you looked. Your summary must name at least one non-trivial code path you actually traced end to end and what you concluded about it. "The diff reads fine" is not a review.',
+  'If you could not examine part of the change — a file you could not open, a hunk omitted from your context, a dependency you could not follow — say so explicitly instead of approving around it.',
+].join('\n');
+
+/**
+ * Built-in never-report classes. A strictness adjective alone doesn't work: models satisfy
+ * "prefer high-signal findings" by reporting fewer things roughly at random rather than by
+ * dropping the right things. Naming the categories is what actually removes them. Consumers append
+ * their own via `review.exclusions`, which accumulates across config layers.
+ */
+const REVIEW_BUILTIN_EXCLUSIONS: string[] = [
+  'Race conditions, TOCTOU, and timing issues that are theoretical. Report one only if you can name a concrete interleaving that occurs in this system.',
+  'Missing hardening or defence-in-depth where you cannot name a concrete failure. Code is not expected to implement every best practice.',
+  'Formatting, whitespace, import ordering, and quote style. A formatter or linter owns these.',
+  'Naming and stylistic preference where the existing name is not actively misleading.',
+  'Anything in generated, vendored, minified, or lockfile paths.',
+  'Anything whose only substance is "add a test", without naming the specific untested branch and an input that reaches it.',
+  'Dependency versions, upgrade advice, and known CVEs in third-party packages. These are managed separately.',
+  'Findings in documentation, markdown, or comment prose, unless the text states something the code contradicts.',
+  'Unsanitised user input reaching a log. Log spoofing is not a vulnerability; secrets or PII in logs are.',
+  'Missing audit logs, metrics, or observability.',
+  '"Consider extracting this", "this could be more idiomatic", and other suggestions with no defect behind them.',
+  'Pre-existing problems in code this change merely touches. See the scope rule below.',
+];
+
+/**
+ * Built-in precedents: settled rulings on cases that otherwise get re-litigated on every pull
+ * request. The reference harness carries a list like this because accumulated adjudications are
+ * what separate a useful reviewer from a pedantic one.
+ */
+const REVIEW_BUILTIN_PRECEDENTS: string[] = [
+  'Environment variables, CI inputs, and command-line flags are trusted values. An attack that requires controlling them is not a finding.',
+  'Framework and language guarantees may be trusted. Do not flag a framework doing what it documents.',
+  'Internal callers within this repository do not need defensive validation at every boundary. Validate at the edge, not at every frame.',
+  'Do not ask for error handling, fallbacks, or validation for states that cannot occur. Unreachable defensive code is a cost, not a safety net.',
+  'A missing check is only a finding if you can name the caller or input that reaches it unchecked.',
+  'Memory-safety issues are not possible in garbage-collected or memory-safe languages. Do not report them there.',
+  'Test files and fixtures are held to a lower bar than production code. Do not review them for hardening, performance, or duplication.',
+  'A type error, lint failure, or test failure you did not actually observe a tool report is not a finding. Do not imply you ran something you did not.',
+];
+
+/**
+ * Scope. Without this the model happily flags long-standing issues it noticed while reading
+ * callers, which is unactionable in a pull request and reads as noise.
+ */
+const REVIEW_SCOPE = [
+  '## Scope',
+  'Review only what this pull request introduces or changes. A pre-existing problem that the change merely touches is out of scope unless the change makes it materially worse or newly reachable — in that case explain why, in the summary.',
+  'If the change is one step of an obviously staged effort, review the step in front of you, not the parts that have not arrived yet.',
+].join('\n');
+
+/**
+ * Anchoring. The forge only accepts an inline comment on a line that appears in the diff as added
+ * or context; a finding pointing anywhere else has to be demoted to plain text in the review body,
+ * where it is much less useful. crab'd computes that legal set and renders it into the user turn
+ * (see `## Where you may anchor inline findings`), so the rule is stated here rather than left for
+ * the model to infer by arithmetic off a hunk header.
+ */
+const REVIEW_ANCHORING = [
+  '## Anchoring findings',
+  "A finding's `line` must be a new-side line number that appears in the diff as an added (`+`) or context (` `) line. The prompt lists the exact lines you may use, per file — use those numbers verbatim and do not compute them yourself.",
+  'If the real problem lives outside those ranges, still report it: anchor to the nearest listed line in the same file that is implicated, and say in the body which line you actually mean.',
+].join('\n');
+
+/**
+ * The finding contract. `failureScenario` is the load-bearing requirement — a finding that cannot
+ * name concrete inputs *and* the concrete wrong outcome is exactly the shape a pattern-matched
+ * false positive takes, and requiring both halves means the model has to do the work or drop it.
+ * The worked pair (one conforming, one rejected) is deliberate: a rule plus a rejected example is
+ * far more effective than the rule alone.
+ */
+function reviewFindingContract(minConfidence: number, maxFindings: number): string {
   return [
-    "You are crab'd, an autonomous code reviewer.",
-    `Review the pull request diff for correctness, security, and clarity. ${guidance}`,
-    'Post a concise summary and, where useful, specific inline findings.',
-    'Pick a verdict: APPROVE when it is good to merge (LGTM), COMMENT when only minor nits remain, REQUEST_CHANGES when findings should be addressed before merging.',
+    '## Finding contract',
+    'Every finding must carry all of these. A finding missing any of them must not be reported.',
+    '- `severity` — `blocker` (must not merge), `major` (should be fixed before merge), `minor` (worth fixing), `nit` (trivial).',
+    '- `category` — one of the dimension slugs listed above.',
+    '- `shortSummary` — under 80 characters, the claim alone.',
+    '- `body` — what is wrong and why it matters. Do not restate the diff.',
+    '- `failureScenario` — concrete inputs or state, and the concrete wrong result: wrong output, crash, corrupted or lost data, hang, or security consequence. **If you cannot name both halves, you do not have a finding yet — drop it.**',
+    '- `evidence` — `location` as `path:line` you actually opened, and `quote`, text copied verbatim from that location. The quote is checked against the file; if it does not match, the finding is discarded and you have wasted the reader\'s trust. At least one finding\'s evidence should come from outside the diff (a caller, a definition, a config) — that is what distinguishes a verified finding from a guess.',
+    `- \`confidence\` — 1–10. 1–3: likely a false positive. 4–6: plausible, not established. 7–8: you traced it and it holds. 9–10: certain, with the failure path identified. **Do not report anything below ${minConfidence}** — findings under the bar are dropped before posting, so reporting them only costs you.`,
+    '- `recommendation` — optional; the concrete fix, when you have one worth stating.',
+    '',
+    'Conforming:',
+    '> severity `major`, category `correctness`, shortSummary "parseLimit returns NaN for empty query param"',
+    '> body: `parseLimit` passes the raw query value to `Number()` without checking for the empty string. `Number(\'\')` is `0`, not `NaN`, so the `|| DEFAULT` fallback below never fires and the limit becomes 0.',
+    '> failureScenario: a request to `/items?limit=` returns an empty page instead of the default 20 items; the caller sees no results and no error.',
+    '> evidence: `src/api/items.ts:41` — `const limit = Number(req.query.limit) || DEFAULT_LIMIT`',
+    '',
+    'Rejected — no scenario, no evidence, nothing traced:',
+    '> body: "`req.query.limit` could be undefined here, which might cause unexpected behaviour. Consider adding validation."',
+    'This names no input, no outcome, and cites nothing. It is the shape of a guess. Drop it or do the work.',
+    '',
+    `Return findings sorted most severe first. At most ${maxFindings} will be posted; anything beyond that is dropped, so put your best findings first rather than padding the list.`,
+  ].join('\n');
+}
+
+/**
+ * The reporting bar. crab'd's old strictness ladder actively instructed the model at levels 3–5 to
+ * "treat 'no issues found' as a last resort — assume there is something worth raising and look
+ * until you find it", which is a direct instruction to manufacture findings. Strictness now moves
+ * the confidence floor and the active dimension set instead, and this block — which sits below the
+ * strictness line and applies at every level — makes an empty review a legitimate outcome.
+ */
+const REVIEW_REPORTING_BAR = [
+  '## The bar',
+  'Zero findings is a good outcome when the change is sound. Say so in a sentence or two and approve. Do not manufacture findings to look thorough.',
+  'Every finding must be one a senior engineer on this codebase would raise in a review without hedging. If you would feel the need to preface it with "minor" or "nit" to soften it, drop it instead.',
+  'Better to miss a theoretical issue than to bury a real one in noise.',
+].join('\n');
+
+/**
+ * Re-review continuity. `renderContext` already puts prior comments in the user turn and labels
+ * crab'd's own earlier replies, but nothing told the model what to do with them — so a re-review
+ * after a push re-raised findings the author had already answered, which is the fastest way to get
+ * a review bot muted.
+ */
+const REVIEW_DEDUP = [
+  '## If you have reviewed this before',
+  "The comments in your context may include your own earlier reviews and the author's replies. Do not re-raise anything already in that thread:",
+  '- Fixed since your last review: say nothing about it.',
+  '- Explained as intentional by the author: accept it, unless you have new evidence they did not address.',
+  '- Neither fixed nor answered: reference your earlier comment rather than writing a fresh duplicate.',
+  'If the previous review is yours and you now think it was wrong, say so plainly and withdraw it.',
+].join('\n');
+
+/** Verdict semantics. Kept close to the original wording — it was already unambiguous. */
+const REVIEW_VERDICT = [
+  '## Verdict',
+  'APPROVE when the change is good to merge. COMMENT when only minor points remain. REQUEST_CHANGES when something should be addressed before merging.',
+  'A `blocker` or `major` finding means REQUEST_CHANGES. Do not approve a change while telling the author it is broken.',
+].join('\n');
+
+/** Render a numbered list, or nothing at all when the list is empty. */
+function numberedBlock(heading: string, lead: string, items: string[]): string {
+  if (items.length === 0) return '';
+  const list = items.map((item, i) => `${i + 1}. ${item}`).join('\n');
+  return `${heading}\n${lead}\n${list}`;
+}
+
+/** Build the review base prompt from the config's strictness-derived dials. */
+function reviewPrompt(review: ResolvedConfig['review']): string {
+  const dimensions = review.dimensions.length > 0 ? review.dimensions : (['correctness', 'security'] as ReviewDimension[]);
+  const checklists = dimensions
+    .map((d) => `- **${d}** — ${REVIEW_DIMENSION_CHECKLISTS[d]}`)
+    .join('\n');
+
+  return [
+    REVIEW_ROLE,
+    REVIEW_RATIONALIZATIONS,
+    REVIEW_METHOD,
+    `## What to look for\nReview along these dimensions. Use the slug as a finding's \`category\`.\n${checklists}`,
+    REVIEW_BEFORE_REPORTING,
+    REVIEW_BEFORE_APPROVING,
+    numberedBlock(
+      '## Do not report',
+      'These are never findings, however real they look. If one is the only thing you found, report nothing.',
+      [...REVIEW_BUILTIN_EXCLUSIONS, ...review.exclusions],
+    ),
+    numberedBlock(
+      '## Precedents',
+      'Settled rulings. Apply them rather than re-deciding:',
+      [...REVIEW_BUILTIN_PRECEDENTS, ...review.precedents],
+    ),
+    REVIEW_SCOPE,
+    REVIEW_ANCHORING,
+    reviewFindingContract(review.minConfidence, review.maxFindings),
+    REVIEW_REPORTING_BAR,
+    REVIEW_DEDUP,
+    REVIEW_VERDICT,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+/**
+ * The non-negotiables, restated as the last thing in the user turn.
+ *
+ * A long system prompt's hard contract decays over a run: by the time the model emits structured
+ * output it has read many files, and the finding contract is thousands of tokens back. The
+ * reference harness solves this by re-injecting a short reminder every turn; `@flue/runtime`
+ * exposes no per-turn hook, so crab'd uses the two positions it controls — the tail of the user
+ * message (here) and the wrap-up prompt.
+ */
+export function criticalReviewReminder(minConfidence: number): string {
+  return [
+    '---',
+    '**Before you answer, check each finding against the contract:**',
+    `- A concrete \`failureScenario\` (inputs → wrong result) and \`confidence\` of at least ${minConfidence}. Otherwise drop it.`,
+    '- `evidence.quote` copied verbatim from `evidence.location`, in a file you actually opened. Fabricated quotes are discarded.',
+    '- `line` is a new-side line listed as anchorable for that file.',
+    '- Nothing from the "Do not report" list; nothing pre-existing that this change did not introduce.',
+    '- Zero findings is a valid and often correct answer.',
   ].join('\n');
 }
 
@@ -93,8 +363,8 @@ function environmentNote(repos: ResolvedConfig['repos'] | undefined, forge: stri
 }
 
 function baseInstructions(mode: string, config: ResolvedConfig, forge: string): string {
-  const base = mode === 'review' ? reviewPrompt(config.review.strictness) : (BASE_PROMPTS[mode] ?? GENERIC_BASE);
-  return `${base}\n${VOICE_NOTE}\n${environmentNote(config.repos, forge)}`;
+  const base = mode === 'review' ? reviewPrompt(config.review) : (BASE_PROMPTS[mode] ?? GENERIC_BASE);
+  return `${base}\n\n${VOICE_NOTE}\n${environmentNote(config.repos, forge)}`;
 }
 
 export interface AssembledPrompt {
@@ -142,7 +412,16 @@ const LOW_SIGNAL_RULES: { reason: string; test: (path: string) => boolean }[] = 
   {
     reason: 'generated',
     test: (p) =>
-      /(^|\/)(dist|build|out|vendor|node_modules|__snapshots__)\//.test(p) || /\.(min\.(js|css)|map|snap)$/.test(p),
+      /(^|\/)(dist|build|out|vendor|node_modules|__snapshots__|third_party|coverage|\.next|\.nuxt|\.svelte-kit|__pycache__|venv|\.venv)\//.test(
+        p,
+      ) ||
+      /\.(min\.(js|css)|map|snap)$/.test(p) ||
+      // Generated code conventions across ecosystems: TS declaration output, protobuf, and the
+      // common `*.generated.*` / `*.gen.*` / OpenAPI-codegen markers.
+      /\.d\.ts$/.test(p) ||
+      /\.pb\.(go|js|ts|py|rb|cc|h)$/.test(p) ||
+      /_pb2(_grpc)?\.pyi?$/.test(p) ||
+      /\.(generated|gen|swagger|openapi)\.[^/]+$/.test(p),
   },
 ];
 
@@ -154,32 +433,19 @@ function fence(body: string): string {
   return `\`\`\`diff\n${body}\n\`\`\``;
 }
 
-/** Extract the target path from one `diff --git` section (prefers the new path). */
-function sectionPath(section: string): string | undefined {
-  const plus = section.match(/^\+\+\+ b\/(.+)$/m)?.[1];
-  if (plus && plus !== '/dev/null') return plus.trim();
-  const minus = section.match(/^--- a\/(.+)$/m)?.[1];
-  if (minus && minus !== '/dev/null') return minus.trim();
-  return section.match(/^diff --git a\/(.+) b\/(.+)$/m)?.[2]?.trim();
-}
-
-/** Split a whole unified diff into per-file sections, each starting at its `diff --git` line. */
-export function splitSections(diff: string): { path: string; text: string }[] {
-  const start = diff.indexOf('diff --git ');
-  if (start === -1) return [];
-  return diff
-    .slice(start)
-    .split(/\n(?=diff --git )/)
-    .flatMap((text) => {
-      const path = sectionPath(text);
-      return path ? [{ path, text }] : [];
-    });
-}
-
-/** Keep the whole `@@` hunks of a section that fit under `cap`; report how many of how many. */
-function clipSection(text: string, cap: number): { text: string; shown: number; total: number } {
+/**
+ * Keep the whole `@@` hunks of a section that fit under `cap`.
+ *
+ * Also reports the new-side line ranges of the hunks that did *not* fit. Saying "3 of 11 hunks
+ * shown" leaves the model unable to tell what it is missing or where to look; naming the ranges
+ * makes the gap actionable, since it can read exactly those lines with its file tools.
+ */
+function clipSection(
+  text: string,
+  cap: number,
+): { text: string; shown: number; total: number; omittedRanges: string[] } {
   const firstHunk = text.indexOf('\n@@');
-  if (firstHunk === -1) return { text: truncate(text, cap), shown: 0, total: 0 };
+  if (firstHunk === -1) return { text: truncate(text, cap), shown: 0, total: 0, omittedRanges: [] };
   const header = text.slice(0, firstHunk);
   const hunks = text.slice(firstHunk + 1).split(/\n(?=@@ )/);
   const kept: string[] = [];
@@ -189,7 +455,11 @@ function clipSection(text: string, cap: number): { text: string; shown: number; 
     kept.push(hunk);
     size += hunk.length + 1;
   }
-  return { text: `${header}\n${kept.join('\n')}`, shown: kept.length, total: hunks.length };
+  const omittedRanges = hunks
+    .slice(kept.length)
+    .flatMap((hunk) => hunkRanges(hunk))
+    .map(({ start, end }) => (start === end ? `${start}` : `${start}-${end}`));
+  return { text: `${header}\n${kept.join('\n')}`, shown: kept.length, total: hunks.length, omittedRanges };
 }
 
 /**
@@ -208,12 +478,17 @@ export function compressDiff(diff: string, changedFiles: ForgeChangedFile[]): st
   const notes: { path: string; reason: string }[] = [];
   let used = 0;
 
-  for (const { path, text } of sections) {
-    const low = lowSignalReason(path);
-    if (low) {
-      notes.push({ path, reason: low });
-      continue;
-    }
+  // Drop low-signal files up front, then budget the rest smallest-first so one enormous file can't
+  // consume the budget and leave a dozen small, high-value diffs unshown.
+  const reviewable: { path: string; text: string }[] = [];
+  for (const section of sections) {
+    const low = lowSignalReason(section.path);
+    if (low) notes.push({ path: section.path, reason: low });
+    else reviewable.push(section);
+  }
+  reviewable.sort((a, b) => a.text.length - b.text.length);
+
+  for (const { path, text } of reviewable) {
     const remaining = COMPRESSED_DIFF_BUDGET - used;
     const cap = Math.min(PER_FILE_DIFF_BUDGET, remaining);
     if (remaining <= 0) {
@@ -232,7 +507,13 @@ export function compressDiff(diff: string, changedFiles: ForgeChangedFile[]): st
     }
     included.push(clip.text);
     used += clip.text.length + 1;
-    if (clip.shown < clip.total) notes.push({ path, reason: `${clip.shown} of ${clip.total} hunks shown` });
+    if (clip.shown < clip.total) {
+      const where = clip.omittedRanges.length > 0 ? `, covering lines ${clip.omittedRanges.join(', ')}` : '';
+      notes.push({
+        path,
+        reason: `${clip.total - clip.shown} of ${clip.total} hunks omitted${where}`,
+      });
+    }
   }
 
   const body = fence(included.join('\n'));
@@ -241,19 +522,241 @@ export function compressDiff(diff: string, changedFiles: ForgeChangedFile[]): st
   const list = notes
     .map(({ path, reason }) => {
       const f = byPath.get(path);
-      return f ? `\`${path}\` (${reason}, +${f.additions}/-${f.deletions})` : `\`${path}\` (${reason})`;
+      const churn = f ? `, +${f.additions}/-${f.deletions}` : '';
+      return `- \`${path}\` — ${reason}${churn}`;
     })
-    .join(', ');
-  return `${body}\n\n_Some files above are compressed or omitted to save space — every change is in the "Changed files" list; read a file directly if you need its full diff: ${list}._`;
+    .join('\n');
+  return [
+    body,
+    '',
+    '**Not fully shown above.** Every change is listed under "Changed files". To see what is missing here,',
+    'read the file at HEAD at the line ranges named below with your file tools — do not try `git diff`, as this',
+    'checkout may be shallow. Do not issue a verdict on a file while hunks you have not read remain in it.',
+    '',
+    list,
+  ].join('\n');
+}
+
+/** Char budget for `git status --short` in the workspace block. */
+const STATUS_BUDGET = 2_000;
+
+/** Global char budget for the line-numbered HEAD file contents. */
+const FILE_CONTENTS_BUDGET = 40_000;
+/** A file longer than this is sent as windows around its hunks rather than whole. */
+const WHOLE_FILE_LIMIT = 6_000;
+/** Lines of context either side of a hunk when windowing a large file. */
+const WINDOW_PADDING = 40;
+
+/**
+ * Prefix each line with its absolute line number, in the shape a file-read tool returns.
+ *
+ * The point is that the model never has to compute a coordinate. It is handed the same numbering it
+ * must cite back, so `finding.line` is a copy rather than an arithmetic guess off an `@@` header —
+ * which is what made findings land outside the commentable set and get demoted to body text.
+ */
+function withLineNumbers(text: string, startLine: number): string {
+  return text
+    .split('\n')
+    .map((line, i) => `${String(startLine + i).padStart(6)}→${line}`)
+    .join('\n');
+}
+
+/** New-side line ranges touched by a section's hunks, from its `@@` headers. */
+function hunkRanges(sectionText: string): { start: number; end: number }[] {
+  const ranges: { start: number; end: number }[] = [];
+  for (const raw of sectionText.split('\n')) {
+    const header = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+    if (!header) continue;
+    const start = Number(header[1]);
+    const count = header[2] === undefined ? 1 : Number(header[2]);
+    ranges.push({ start, end: start + Math.max(count, 1) - 1 });
+  }
+  return ranges;
+}
+
+/** Merge overlapping/adjacent windows so the same lines aren't sent twice. */
+function mergeWindows(ranges: { start: number; end: number }[]): { start: number; end: number }[] {
+  const sorted = [...ranges].sort((a, b) => a.start - b.start);
+  const out: { start: number; end: number }[] = [];
+  for (const range of sorted) {
+    const last = out[out.length - 1];
+    if (last && range.start <= last.end + 1) last.end = Math.max(last.end, range.end);
+    else out.push({ ...range });
+  }
+  return out;
+}
+
+/**
+ * Render what the checkout actually contains, so the model never reasons about files without
+ * knowing which version of them it is reading.
+ *
+ * The load-bearing case is a mismatch: on an `issue_comment` trigger a plain `actions/checkout`
+ * leaves the runner on the default branch, so the files on disk are *not* the pull request even
+ * though the diff in the prompt is. `run/prepare.ts` tries to correct that first; when it can't,
+ * this block tells the model outright rather than letting it review the wrong tree in silence.
+ */
+export function renderWorkspace(workspace: WorkspaceState): string {
+  const lines: string[] = ['## Workspace'];
+
+  if (workspace.matchesPrHead === false) {
+    lines.push(
+      "**The working tree is NOT this pull request's head.** The files in this checkout do not include the changes under review. Review from the diff in this prompt only, do not trust anything you read from disk, and say clearly in your summary that you could not read the changed files.",
+      '',
+    );
+  }
+
+  lines.push(`Checked-out ref: ${workspace.branch ? `\`${workspace.branch}\`` : '(detached HEAD)'}`);
+  if (workspace.headSha) lines.push(`Checkout HEAD: \`${workspace.headSha}\``);
+  if (workspace.expectedHeadSha) lines.push(`Pull request head: \`${workspace.expectedHeadSha}\``);
+
+  lines.push(
+    workspace.status.trim()
+      ? `\nUncommitted changes (\`git status --short\`):\n\`\`\`\n${truncate(workspace.status, STATUS_BUDGET)}\n\`\`\``
+      : '\nWorking tree is clean.',
+  );
+
+  if (workspace.recentCommits.length > 0) {
+    lines.push(`\nRecent commits:\n\`\`\`\n${workspace.recentCommits.join('\n')}\n\`\`\``);
+  }
+
+  // Same caveat the reference harness states: this is a snapshot, not a live view.
+  lines.push('\n_This is a snapshot taken before the run started; it does not update as you work._');
+  return lines.join('\n');
+}
+
+/**
+ * Tell the model exactly which lines it may anchor an inline finding to.
+ *
+ * A forge resolves a review comment's line against the diff and rejects anything outside a changed
+ * hunk. crab'd has always known that set; it just never showed it to the model. Handing over the
+ * ranges is the difference between "guess a line number and hope" and "copy one of these".
+ */
+export function renderAnchorableLines(anchorable: AnchorableFile[]): string {
+  // Lockfiles and generated output are dropped from the diff body and are excluded from review by
+  // the prompt's exclusion list, so offering them as anchor targets would only invite a finding we
+  // have already said not to make.
+  const reviewable = anchorable.filter(({ path }) => !lowSignalReason(path));
+  if (reviewable.length === 0) return '';
+  const list = reviewable.map(({ path, ranges }) => `- \`${path}\`: ${ranges.join(', ')}`).join('\n');
+  return [
+    '## Where you may anchor inline findings',
+    "These are the only new-side line numbers this forge will accept an inline comment on. Use one of them verbatim as a finding's `line`. A finding anchored anywhere else cannot be posted inline and gets demoted to plain text at the bottom of the review, where it is much easier to miss.",
+    '',
+    list,
+  ].join('\n');
+}
+
+/**
+ * Render the changed files as they exist at HEAD, line-numbered.
+ *
+ * The diff shows a few lines either side of each hunk, which is not enough to tell whether a hunk
+ * is correct — the guard that makes it safe is usually further up the function, and the caller that
+ * breaks is in another file entirely. Sending the real file (windowed around the hunks when it is
+ * large) removes the model's main excuse for reviewing the diff text instead of the code, and gives
+ * it the authoritative line numbers at the same time.
+ *
+ * Returns `''` when nothing could be read — the model still has its file tools.
+ */
+export function renderFileContents(
+  cwd: string,
+  changedFiles: ForgeChangedFile[],
+  diff: string | undefined,
+): string {
+  const sections = diff ? new Map(splitSections(diff).map((s) => [s.path, s.text])) : new Map<string, string>();
+
+  // Smallest first, so a budget spent on one enormous file can't starve every other file.
+  const candidates = changedFiles
+    .filter((f) => f.status !== 'removed' && !lowSignalReason(f.path))
+    .sort((a, b) => a.additions + a.deletions - (b.additions + b.deletions));
+
+  const blocks: string[] = [];
+  const skipped: string[] = [];
+  let used = 0;
+
+  for (const file of candidates) {
+    if (used >= FILE_CONTENTS_BUDGET) {
+      skipped.push(file.path);
+      continue;
+    }
+    let content: string;
+    try {
+      content = readFileSync(join(cwd, file.path), 'utf-8');
+    } catch {
+      // Deleted, binary, or outside the checkout — the "Changed files" list still names it.
+      continue;
+    }
+    // A NUL byte means this isn't text; line-numbering it would be noise.
+    if (content.includes('\0')) continue;
+
+    const lines = content.split('\n');
+    const remaining = FILE_CONTENTS_BUDGET - used;
+
+    if (content.length <= Math.min(WHOLE_FILE_LIMIT, remaining)) {
+      blocks.push(`### \`${file.path}\` (full file, ${lines.length} lines)\n\`\`\`\n${withLineNumbers(content, 1)}\n\`\`\``);
+      used += content.length;
+      continue;
+    }
+
+    // Too big to send whole: send windows around the hunks, each labelled with its true start line
+    // so the numbers stay usable.
+    const section = sections.get(file.path);
+    const windows = mergeWindows(
+      hunkRanges(section ?? '').map((r) => ({
+        start: Math.max(1, r.start - WINDOW_PADDING),
+        end: Math.min(lines.length, r.end + WINDOW_PADDING),
+      })),
+    );
+    if (windows.length === 0) {
+      skipped.push(file.path);
+      continue;
+    }
+
+    const rendered: string[] = [];
+    for (const window of windows) {
+      const slice = lines.slice(window.start - 1, window.end).join('\n');
+      if (used + slice.length > FILE_CONTENTS_BUDGET) break;
+      rendered.push(`lines ${window.start}-${window.end}:\n\`\`\`\n${withLineNumbers(slice, window.start)}\n\`\`\``);
+      used += slice.length;
+    }
+    if (rendered.length === 0) {
+      skipped.push(file.path);
+      continue;
+    }
+    blocks.push(
+      `### \`${file.path}\` (${lines.length} lines, showing ${rendered.length} window${rendered.length === 1 ? '' : 's'} around the changes)\n${rendered.join('\n\n')}`,
+    );
+  }
+
+  if (blocks.length === 0) return '';
+
+  const note = skipped.length > 0
+    ? `\n\n_Not included here (budget): ${skipped.map((p) => `\`${p}\``).join(', ')}. Read them with your file tools._`
+    : '';
+  return [
+    '## Changed files at HEAD (line-numbered)',
+    'The real content of the changed files, as they are on disk. **The numbers on the left are the authoritative line numbers — cite these, never numbers you derived from a diff hunk header.** Where a file is windowed, each window states its own start line. Anything omitted below is still readable with your file tools.',
+    '',
+    blocks.join('\n\n'),
+  ].join('\n') + note;
 }
 
 /**
  * Render the fetched forge context into a readable markdown block for the model. `fullDiff` (from
  * `context.full_diff`, off by default) sends the whole diff; otherwise the diff is compressed.
  */
-function renderContext(context: ForgeContext, event: ForgeEvent, fullDiff: boolean): string {
+function renderContext(
+  context: ForgeContext,
+  event: ForgeEvent,
+  fullDiff: boolean,
+  workspace?: WorkspaceState,
+  /** Review mode gets the extra file-content and anchoring sections; other modes don't need them. */
+  review = false,
+  /** Checkout root, needed to read the changed files. Omitted = skip the file-contents section. */
+  cwd?: string,
+): string {
   const lines: string[] = [];
   lines.push(`## Repository\n${context.repo.slug} (default branch: ${context.repo.defaultBranch})`);
+  if (workspace) lines.push(renderWorkspace(workspace));
 
   const subject = context.pullRequest ?? context.issue;
   if (subject) {
@@ -275,6 +778,17 @@ function renderContext(context: ForgeContext, event: ForgeEvent, fullDiff: boole
   if (context.diff) {
     const rendered = fullDiff ? fence(truncate(context.diff, FULL_DIFF_BUDGET)) : compressDiff(context.diff, context.changedFiles);
     lines.push(`## Diff\n${rendered}`);
+  }
+
+  // Review only, and only when there is a diff to anchor against: the real file contents so the
+  // model can judge a hunk in context, and the legal anchor lines so it doesn't have to guess them.
+  if (review && context.diff) {
+    if (cwd) {
+      const contents = renderFileContents(cwd, context.changedFiles, context.diff);
+      if (contents) lines.push(contents);
+    }
+    const anchors = renderAnchorableLines(describeCommentableLines(context.diff));
+    if (anchors) lines.push(anchors);
   }
 
   // The triggering comment is rendered in full under its own header below; drop it here so it isn't
@@ -309,6 +823,16 @@ export interface AssembleOptions {
   trigger: TriggerResult;
   /** Repo-authored context (AGENTS.md/CLAUDE.md, skills) to fold into the system prompt. */
   project?: ProjectContext;
+  /**
+   * Resolved VCS state of the checkout. Rendered into the user turn so the model knows which
+   * version of the files it is reading — and is warned when the tree isn't the PR head.
+   */
+  workspace?: WorkspaceState;
+  /**
+   * Checkout root. Review mode reads the changed files from here to send their line-numbered
+   * content alongside the diff; omit it to skip that section (the agent still has its file tools).
+   */
+  cwd?: string;
 }
 
 /**
@@ -357,7 +881,7 @@ function renderProjectContext(project: ProjectContext | undefined): string[] {
  *   into every mode, so a mention can steer a review or implementation).
  */
 export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
-  const { mode, config, context, event, trigger, project } = options;
+  const { mode, config, context, event, trigger, project, workspace, cwd } = options;
 
   const base = config.prompt.override ?? baseInstructions(mode, config, event.forge);
   const appends = [config.prompt.instructions, config.modes[mode]?.instructions].filter(
@@ -365,9 +889,15 @@ export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
   );
   const instructions = [base, ...appends, ...renderProjectContext(project)].join('\n\n');
 
-  const parts = [renderContext(context, event, config.context.fullDiff)];
+  const parts = [renderContext(context, event, config.context.fullDiff, workspace, mode === 'review', cwd)];
   if (trigger.userInstruction) {
     parts.push(`## Instruction from the user\n${trigger.userInstruction}`);
+  }
+  // Last block in the user turn, so the finding contract is the most recent thing in context when
+  // the model produces its answer rather than the least recent. Review only — the other modes have
+  // no comparable contract to drift away from.
+  if (mode === 'review') {
+    parts.push(criticalReviewReminder(config.review.minConfidence));
   }
 
   return { instructions, message: parts.join('\n\n') };

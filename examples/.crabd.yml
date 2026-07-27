@@ -41,11 +41,41 @@ context:
 #   # env: [SOME_OTHER_TOKEN] # only for non-registry secrets a task needs
 
 # PR review behavior. comment_only keeps crab'd from approving/blocking (comment only).
-# strictness (1–5, default 2) tunes how hard it hones in: 1 flags only merge-blockers,
-# 5 is maximally nitpicky and slow to approve. Turn it up if reviews are too lenient.
+#
+# strictness (1–5, default 2) is the main dial. It sets two things: the confidence a
+# finding needs to be posted (1 → 9, 2 → 7, 3 → 6, 4 → 5, 5 → 4) and which dimensions
+# are reviewed (1 is correctness + security only; 4–5 is everything). Turn it up if
+# reviews are too lenient, down if they are noisy.
 review:
   comment_only: false
-  strictness: 2 # 1 lenient … 5 nitpicky
+  strictness: 2 # 1 lenient … 5 thorough
+
+  # Override the strictness-derived dials directly.
+  # min_confidence: 7 # 1–10; findings below this are dropped before posting
+  # max_findings: 10 # ranked by severity then confidence, the tail is dropped
+  # dimensions: [correctness, security, error-handling] # see the docs for the full set
+
+  # Issue classes crab'd must never report, on top of the built-in list. These
+  # ACCUMULATE across config layers (org + repo), so an org can pin house rules and a
+  # repo can retire its own recurring false positives for good.
+  # exclusions:
+  #   - Never comment on the generated client in src/api/generated/.
+  #   - Do not flag the deliberate `any` in the legacy adapter.
+
+  # Settled rulings on cases that otherwise get re-litigated every PR. Also accumulate.
+  # precedents:
+  #   - Our request IDs are opaque and need no validation.
+  #   - The worker pool is single-threaded; sequencing concerns there are moot.
+
+  # Second-pass verification: each candidate finding is sent to an independent, blinded
+  # refuter that tries to disprove it, and only survivors are posted. This is the
+  # strongest lever on false positives, but it costs one extra model call per candidate
+  # finding — so it is OFF by default and yours to opt into.
+  # verify:
+  #   enabled: true
+  #   min_confidence: 7 # confidence the refuter needs to let a finding through
+  #   max_concurrency: 3 # refuters in flight at once
+  #   model: anthropic/claude-haiku-4-5 # defaults to the review model
 
 prompt:
   instructions: |

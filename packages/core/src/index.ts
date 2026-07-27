@@ -27,9 +27,27 @@ export { parseGitHubEvent } from './trigger/parse-github.ts';
 export {
   assemblePrompt,
   compressDiff,
+  criticalReviewReminder,
+  renderAnchorableLines,
+  renderFileContents,
+  renderWorkspace,
   type AssembledPrompt,
   type AssembleOptions,
 } from './context/assemble.ts';
+export {
+  buildRefuterPrompt,
+  REFUTER_INSTRUCTIONS,
+  RefuterVerdictSchema,
+  survivesRefutation,
+  type RefuterVerdict,
+} from './context/verify.ts';
+export {
+  commentableLines,
+  describeCommentableLines,
+  expandCommentableLines,
+  snapToCommentableLine,
+  type AnchorableFile,
+} from './context/diff-lines.ts';
 export {
   loadProjectContext,
   type LoadProjectContextOptions,
@@ -53,15 +71,28 @@ export {
   type FinalizeContext,
   type FinalizeResult,
   type ModeDefinition,
+  type ValidateContext,
+  type ValidateResult,
 } from './modes/registry.ts';
 export { registerBuiltinModes } from './modes/builtins.ts';
 export { mentionMode, MentionOutputSchema, type MentionOutput } from './modes/mention.ts';
-export { reviewMode, ReviewOutputSchema, type ReviewOutput } from './modes/review.ts';
+export {
+  applyFindingGates,
+  partitionFindings,
+  reviewMode,
+  ReviewFindingSchema,
+  ReviewOutputSchema,
+  REVIEW_SEVERITIES,
+  type ReviewFinding,
+  type ReviewOutput,
+  type ReviewSeverity,
+} from './modes/review.ts';
 export { implementMode, ImplementOutputSchema, type ImplementOutput } from './modes/implement.ts';
 export { commitWorkingChanges, subjectNumber } from './modes/shared.ts';
 
 // Git
 export { collectChanges, hasChanges } from './git/changes.ts';
+export { checkoutPrHead, resolveWorkspace, type WorkspaceState } from './git/workspace.ts';
 
 // Rate limiting
 export {

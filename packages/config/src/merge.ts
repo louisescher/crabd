@@ -1,11 +1,18 @@
 import {
   DEFAULT_CONFIG,
+  REVIEW_MAX_FINDINGS_DEFAULT,
+  REVIEW_MIN_CONFIDENCE_DEFAULT,
+  REVIEW_STRICTNESS_CONFIDENCE,
   REVIEW_STRICTNESS_DEFAULT,
+  REVIEW_STRICTNESS_DIMENSIONS,
+  REVIEW_VERIFY_MAX_CONCURRENCY_DEFAULT,
+  REVIEW_VERIFY_MIN_CONFIDENCE_DEFAULT,
   type BackoffStrategy,
   type CrabdConfigPartial,
   type ModePartial,
   type RateLimitOnExhausted,
   type RateLimitTriggerScope,
+  type ReviewDimension,
   type ThinkingLevel,
 } from './schema.ts';
 
@@ -33,6 +40,17 @@ export interface ResolvedNpmRegistry {
   tokenEnv?: string;
 }
 
+/** The resolved second-pass refutation stage (`review.verify`). */
+export interface ResolvedReviewVerify {
+  enabled: boolean;
+  /** Confidence a refuter needs in a finding for it to survive, on top of its verdict. */
+  minConfidence: number;
+  /** How many refuters run at once. */
+  maxConcurrency: number;
+  /** Model for the refuters; unset = the review model. */
+  model?: string;
+}
+
 export interface ResolvedMode {
   name: string;
   enabled: boolean;
@@ -52,7 +70,22 @@ export interface ResolvedConfig {
   permissions: { allowedAssociations: string[] };
   /** How crab'd presents itself in tracking comments. */
   appearance: { name: string; emoji: string; footer: boolean };
-  review: { commentOnly: boolean; strictness: number };
+  review: {
+    commentOnly: boolean;
+    strictness: number;
+    /** Confidence floor (1–10) a finding must meet; derived from `strictness` unless overridden. */
+    minConfidence: number;
+    /** Cap on inline findings, applied after ranking by severity then confidence. */
+    maxFindings: number;
+    /** Dimensions to review along; derived from `strictness` unless overridden. */
+    dimensions: ReviewDimension[];
+    /** Extra never-report classes, accumulated across all layers on top of the built-ins. */
+    exclusions: string[];
+    /** Settled rulings on recurring ambiguous cases, accumulated across all layers. */
+    precedents: string[];
+    /** The opt-in second-pass refutation stage. */
+    verify: ResolvedReviewVerify;
+  };
   webSearch: { enabled: boolean; maxResults: number };
   /** Which repo-authored context (instruction files, skills) crab'd pulls into the prompt, plus whether to send the full diff (vs. a compressed one). */
   context: { instructionFiles: boolean; skills: boolean; fullDiff: boolean };
@@ -164,6 +197,30 @@ function accumulate(
 }
 
 /**
+ * Concatenate list entries across all contributing layers, in precedence order, de-duplicated.
+ *
+ * The additive counterpart to {@link pickScalar} for lists — used where a lower layer's entries
+ * are house rules a higher layer should extend rather than silently discard (`review.exclusions`,
+ * `review.precedents`). Contrast `providers.allowlist`, which is a *replacement* list because
+ * narrowing it is the whole point.
+ */
+function accumulateList(
+  path: string,
+  get: (c: CrabdConfigPartial) => string[] | undefined,
+  all: NamedLayer[],
+  locked: ReadonlySet<string>,
+): string[] {
+  const seen = new Set<string>();
+  for (const layer of contributing(path, all, locked)) {
+    for (const raw of get(layer.config) ?? []) {
+      const entry = raw.trim();
+      if (entry) seen.add(entry);
+    }
+  }
+  return [...seen];
+}
+
+/**
  * Reconcile a keyed list across layers: collect entries from every contributing
  * layer keyed by `key`, so a higher layer **overrides** a same-key entry and adds
  * new ones, rather than replacing the whole list. Used for `mcp` (by name) and
@@ -240,6 +297,31 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
   const commentOnly = pickScalar('review.comment_only', (c) => c.review?.comment_only, layers, locked) ?? false;
   const strictness =
     pickScalar('review.strictness', (c) => c.review?.strictness, layers, locked) ?? REVIEW_STRICTNESS_DEFAULT;
+  // Both derive from strictness unless a layer sets them explicitly, so the single existing dial
+  // keeps working while the new keys stay available for fine control.
+  const minConfidence =
+    pickScalar('review.min_confidence', (c) => c.review?.min_confidence, layers, locked) ??
+    REVIEW_STRICTNESS_CONFIDENCE[strictness] ??
+    REVIEW_MIN_CONFIDENCE_DEFAULT;
+  const maxFindings =
+    pickScalar('review.max_findings', (c) => c.review?.max_findings, layers, locked) ?? REVIEW_MAX_FINDINGS_DEFAULT;
+  const dimensions =
+    pickScalar('review.dimensions', (c) => c.review?.dimensions, layers, locked) ??
+    REVIEW_STRICTNESS_DIMENSIONS[strictness] ??
+    REVIEW_STRICTNESS_DIMENSIONS[REVIEW_STRICTNESS_DEFAULT]!;
+  const exclusions = accumulateList('review.exclusions', (c) => c.review?.exclusions, layers, locked);
+  const precedents = accumulateList('review.precedents', (c) => c.review?.precedents, layers, locked);
+  const verifyModel = pickScalar('review.verify.model', (c) => c.review?.verify?.model, layers, locked);
+  const verify: ResolvedReviewVerify = {
+    enabled: pickScalar('review.verify.enabled', (c) => c.review?.verify?.enabled, layers, locked) ?? false,
+    minConfidence:
+      pickScalar('review.verify.min_confidence', (c) => c.review?.verify?.min_confidence, layers, locked) ??
+      REVIEW_VERIFY_MIN_CONFIDENCE_DEFAULT,
+    maxConcurrency:
+      pickScalar('review.verify.max_concurrency', (c) => c.review?.verify?.max_concurrency, layers, locked) ??
+      REVIEW_VERIFY_MAX_CONCURRENCY_DEFAULT,
+    ...(verifyModel ? { model: verifyModel } : {}),
+  };
   const webSearchEnabled = pickScalar('web_search.enabled', (c) => c.web_search?.enabled, layers, locked) ?? true;
   const webSearchMax = pickScalar('web_search.max_results', (c) => c.web_search?.max_results, layers, locked) ?? 5;
 
@@ -279,7 +361,16 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
     providers: { allowlist, gatewayUrl, custom },
     permissions: { allowedAssociations },
     appearance: { name: appearanceName, emoji: appearanceEmoji, footer: appearanceFooter },
-    review: { commentOnly, strictness },
+    review: {
+      commentOnly,
+      strictness,
+      minConfidence,
+      maxFindings,
+      dimensions: [...dimensions],
+      exclusions,
+      precedents,
+      verify,
+    },
     webSearch: { enabled: webSearchEnabled, maxResults: webSearchMax },
     context: { instructionFiles, skills: skillsEnabled, fullDiff },
     repos: { ...(reposRead !== undefined ? { read: reposRead } : {}) },

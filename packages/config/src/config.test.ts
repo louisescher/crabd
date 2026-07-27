@@ -68,6 +68,126 @@ describe('resolveConfig — review.strictness', () => {
   });
 });
 
+describe('resolveConfig — review dials derived from strictness', () => {
+  it('derives the confidence floor, strictest level demanding the most confidence', () => {
+    const floorAt = (strictness: number) =>
+      resolveConfig({ layers: { repo: { review: { strictness } } } }).review.minConfidence;
+    expect(floorAt(1)).toBe(9);
+    expect(floorAt(2)).toBe(7);
+    expect(floorAt(5)).toBe(4);
+  });
+
+  it('derives the dimension set, widening as strictness rises', () => {
+    const dimsAt = (strictness: number) =>
+      resolveConfig({ layers: { repo: { review: { strictness } } } }).review.dimensions;
+    expect(dimsAt(1)).toEqual(['correctness', 'security']);
+    expect(dimsAt(2)).toContain('error-handling');
+    expect(dimsAt(2)).not.toContain('duplication');
+    expect(dimsAt(5)).toContain('duplication');
+    expect(dimsAt(5).length).toBeGreaterThan(dimsAt(3).length);
+  });
+
+  it('lets an explicit value win over the derived one', () => {
+    const r = resolveConfig({
+      layers: { repo: { review: { strictness: 1, min_confidence: 3, dimensions: ['efficiency'] } } },
+    });
+    expect(r.review.minConfidence).toBe(3);
+    expect(r.review.dimensions).toEqual(['efficiency']);
+    // strictness itself is unchanged — it is only the fallback source for the other two.
+    expect(r.review.strictness).toBe(1);
+  });
+
+  it('defaults max_findings and rejects a nonsensical one', () => {
+    expect(resolveConfig({ layers: {} }).review.maxFindings).toBe(10);
+    expect(resolveConfig({ layers: { repo: { review: { max_findings: 3 } } } }).review.maxFindings).toBe(3);
+    expect(() => parseConfigObject({ review: { max_findings: 0 } })).toThrow();
+  });
+
+  it('rejects an unknown dimension slug and an out-of-range confidence', () => {
+    expect(() => parseConfigObject({ review: { dimensions: ['vibes'] } })).toThrow();
+    expect(() => parseConfigObject({ review: { min_confidence: 0 } })).toThrow();
+    expect(() => parseConfigObject({ review: { min_confidence: 11 } })).toThrow();
+  });
+});
+
+describe('resolveConfig — review.verify', () => {
+  it('is off by default, because it costs extra model calls', () => {
+    const v = resolveConfig({ layers: {} }).review.verify;
+    expect(v.enabled).toBe(false);
+    expect(v.minConfidence).toBe(7);
+    expect(v.maxConcurrency).toBe(3);
+    expect(v.model).toBeUndefined();
+  });
+
+  it('resolves an explicit opt-in with its dials', () => {
+    const v = resolveConfig({
+      layers: { repo: { review: { verify: { enabled: true, min_confidence: 9, max_concurrency: 5, model: 'anthropic/claude-haiku-4-5-20251001' } } } },
+    }).review.verify;
+    expect(v).toEqual({
+      enabled: true,
+      minConfidence: 9,
+      maxConcurrency: 5,
+      model: 'anthropic/claude-haiku-4-5-20251001',
+    });
+  });
+
+  it('lets an org lock the opt-in so a repo cannot enable the spend', () => {
+    const v = resolveConfig({
+      layers: {
+        org: { governance: { locked: ['review.verify.enabled'] }, review: { verify: { enabled: false } } },
+        repo: { review: { verify: { enabled: true } } },
+      },
+    }).review.verify;
+    expect(v.enabled).toBe(false);
+  });
+
+  it('rejects nonsensical dials', () => {
+    expect(() => parseConfigObject({ review: { verify: { max_concurrency: 0 } } })).toThrow();
+    expect(() => parseConfigObject({ review: { verify: { min_confidence: 11 } } })).toThrow();
+  });
+});
+
+describe('resolveConfig — review exclusions & precedents accumulate', () => {
+  it('concatenates across layers instead of the highest layer replacing', () => {
+    const r = resolveConfig({
+      layers: {
+        org: { review: { exclusions: ['org rule'], precedents: ['org ruling'] } },
+        repo: { review: { exclusions: ['repo rule'], precedents: ['repo ruling'] } },
+      },
+    });
+    // This is the point of the additive merge: a repo extends the org's house rules, and cannot
+    // silently drop them the way a replacement list would.
+    expect(r.review.exclusions).toEqual(['org rule', 'repo rule']);
+    expect(r.review.precedents).toEqual(['org ruling', 'repo ruling']);
+  });
+
+  it('de-duplicates and drops blank entries', () => {
+    const r = resolveConfig({
+      layers: {
+        org: { review: { exclusions: ['same', '  '] },  },
+        repo: { review: { exclusions: ['same', 'other'] } },
+      },
+    });
+    expect(r.review.exclusions).toEqual(['same', 'other']);
+  });
+
+  it('defaults to empty lists', () => {
+    const r = resolveConfig({ layers: {} });
+    expect(r.review.exclusions).toEqual([]);
+    expect(r.review.precedents).toEqual([]);
+  });
+
+  it('respects governance locking — a repo cannot add to a locked list', () => {
+    const r = resolveConfig({
+      layers: {
+        org: { governance: { locked: ['review.exclusions'] }, review: { exclusions: ['org only'] } },
+        repo: { review: { exclusions: ['sneaky'] } },
+      },
+    });
+    expect(r.review.exclusions).toEqual(['org only']);
+  });
+});
+
 describe('resolveConfig — appearance', () => {
   it('lets a repo override name/emoji/footer', () => {
     const r = resolveConfig({

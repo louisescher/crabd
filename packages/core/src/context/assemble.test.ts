@@ -1,6 +1,10 @@
-import type { ResolvedConfig } from '@crabd/config';
-import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { resolveConfig, type CrabdConfigPartial, type ResolvedConfig } from '@crabd/config';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ForgeChangedFile, ForgeContext, ForgeEvent, ForgeRepo } from '../forge/types.ts';
+import type { WorkspaceState } from '../git/workspace.ts';
 import { assemblePrompt, compressDiff } from './assemble.ts';
 import type { ProjectContext } from './project.ts';
 
@@ -13,17 +17,16 @@ const repo: ForgeRepo = {
 };
 
 /**
- * A minimal resolved config for prompt tests. `context` is always present because `assemblePrompt`
- * reads `config.context.fullDiff`; pass overrides to vary a single field per test.
+ * A resolved config for prompt tests.
+ *
+ * `layer` is a real user-facing config partial run through the real resolver, so derived values
+ * (the confidence floor and dimension set implied by `review.strictness`) are computed the way
+ * they are in production rather than hand-stubbed — a hand-rolled cast previously drifted out of
+ * sync with `ResolvedConfig` whenever a field was added. `patch` is applied after resolution, for
+ * the few fields the resolver deliberately gates (`prompt.override` needs org governance).
  */
-function makeConfig(overrides: Record<string, unknown> = {}): ResolvedConfig {
-  return {
-    prompt: { instructions: '' },
-    modes: { mention: { name: 'mention', enabled: true, instructions: '' } },
-    review: { commentOnly: false, strictness: 2 },
-    context: { instructionFiles: true, skills: true, fullDiff: false },
-    ...overrides,
-  } as unknown as ResolvedConfig;
+function makeConfig(layer: CrabdConfigPartial = {}, patch: Partial<ResolvedConfig> = {}): ResolvedConfig {
+  return { ...resolveConfig({ layers: { repo: layer } }), ...patch };
 }
 
 const config = makeConfig();
@@ -113,7 +116,7 @@ describe('assemblePrompt — operating-environment note', () => {
   });
 
   it('omits the note when the prompt is fully overridden (that caller owns the base)', () => {
-    const overridden = makeConfig({ prompt: { instructions: '', override: 'Custom base prompt.' } });
+    const overridden = makeConfig({}, { prompt: { instructions: '', override: 'Custom base prompt.' } });
     const instructions = assemblePrompt({
       mode: 'mention',
       config: overridden,
@@ -128,31 +131,277 @@ describe('assemblePrompt — operating-environment note', () => {
 
 /** Assemble the review-mode instructions at a given strictness level. */
 function reviewInstructions(strictness: number, override?: string): string {
-  const cfg = makeConfig({
-    prompt: { instructions: '', ...(override ? { override } : {}) },
-    modes: {},
-    review: { commentOnly: false, strictness },
-  });
+  const cfg = makeConfig(
+    { review: { strictness } },
+    override ? { prompt: { instructions: '', override } } : {},
+  );
   return assemblePrompt({ mode: 'review', config: cfg, context, event, trigger: { mode: 'review', explicit: true } })
     .instructions;
 }
 
-describe('assemblePrompt — review strictness', () => {
-  it('uses the lenient guidance at level 1', () => {
-    const instructions = reviewInstructions(1);
-    expect(instructions).toContain("You are crab'd, an autonomous code reviewer.");
-    expect(instructions).toContain('block a merge');
-    expect(instructions).toContain('approve readily');
+describe('assemblePrompt — review prompt structure', () => {
+  const instructions = reviewInstructions(2);
+
+  it('frames the job adversarially rather than as summarising the diff', () => {
+    expect(instructions).toContain("You are crab'd, an autonomous code reviewer");
+    expect(instructions).toContain('it is to find where it breaks');
   });
 
-  it('uses the default high-signal guidance at level 2', () => {
-    expect(reviewInstructions(2)).toContain('high-signal findings over exhaustive nitpicking');
+  it('names the reviewer rationalisations and rebuts them', () => {
+    expect(instructions).toContain('## Recognize your own rationalizations');
+    expect(instructions).toContain('"The diff looks fine."');
+    expect(instructions).toContain('"I have enough findings."');
   });
 
-  it('uses the pedantic guidance at level 5', () => {
-    const instructions = reviewInstructions(5);
-    expect(instructions).toContain('Review pedantically');
-    expect(instructions).toContain('"no issues found" as a last resort');
+  it('mandates reading the real code and finding callers before judging', () => {
+    expect(instructions).toContain('## Method');
+    expect(instructions).toContain('**Read the real code.**');
+    expect(instructions).toContain('**Find the callers.**');
+    expect(instructions).toContain('A finding about code you have not opened is not a finding');
+  });
+
+  it('carries both refutation gates', () => {
+    expect(instructions).toContain('## Before you report a finding');
+    expect(instructions).toContain('**Already handled.**');
+    expect(instructions).toContain('**Intentional.**');
+    expect(instructions).toContain('**Not actionable.**');
+    // The counterweight matters as much as the gate — without it this becomes blanket suppression.
+    expect(instructions).toContain('Do not use these as excuses to wave away real bugs');
+    expect(instructions).toContain('## Before you approve');
+  });
+
+  it('ships numbered exclusions and precedents', () => {
+    expect(instructions).toContain('## Do not report');
+    expect(instructions).toContain('1. Race conditions, TOCTOU');
+    expect(instructions).toContain('## Precedents');
+    expect(instructions).toContain('1. Environment variables, CI inputs');
+  });
+
+  it('states scope, anchoring, and the finding contract', () => {
+    expect(instructions).toContain('## Scope');
+    expect(instructions).toContain('pre-existing problem');
+    expect(instructions).toContain('## Anchoring findings');
+    expect(instructions).toContain('## Finding contract');
+    expect(instructions).toContain('`failureScenario`');
+    expect(instructions).toContain('Rejected — no scenario, no evidence, nothing traced:');
+  });
+
+  it('makes zero findings a legitimate outcome, at every strictness level', () => {
+    for (const level of [1, 2, 3, 4, 5]) {
+      const at = reviewInstructions(level);
+      expect(at).toContain('Zero findings is a good outcome when the change is sound');
+      expect(at).toContain('Do not manufacture findings to look thorough');
+      // The old level 3-5 guidance told the model to keep looking until it found something,
+      // which is a direct instruction to pad. It must not come back.
+      expect(at).not.toContain('as a last resort');
+      expect(at).not.toContain('look until you find it');
+    }
+  });
+
+  it('tells the model how to handle its own earlier reviews', () => {
+    expect(instructions).toContain('## If you have reviewed this before');
+    expect(instructions).toContain('withdraw it');
+  });
+});
+
+describe('assemblePrompt — strictness drives the dials, not adjectives', () => {
+  it('raises the confidence floor as strictness falls', () => {
+    expect(reviewInstructions(1)).toContain('Do not report anything below 9');
+    expect(reviewInstructions(2)).toContain('Do not report anything below 7');
+    expect(reviewInstructions(5)).toContain('Do not report anything below 4');
+  });
+
+  it('reviews only correctness and security at level 1', () => {
+    const at1 = reviewInstructions(1);
+    expect(at1).toContain('- **correctness**');
+    expect(at1).toContain('- **security**');
+    expect(at1).not.toContain('- **duplication**');
+    expect(at1).not.toContain('- **efficiency**');
+  });
+
+  it('enables every dimension at level 5', () => {
+    const at5 = reviewInstructions(5);
+    for (const slug of ['correctness', 'security', 'concurrency-and-resources', 'error-handling', 'efficiency', 'duplication', 'api-and-compatibility', 'test-coverage', 'repo-convention']) {
+      expect(at5).toContain(`- **${slug}**`);
+    }
+  });
+
+  it('honours an explicit dimension list over the strictness default', () => {
+    const cfg = makeConfig({ review: { strictness: 1, dimensions: ['efficiency'] } });
+    const out = assemblePrompt({ mode: 'review', config: cfg, context, event, trigger: { mode: 'review', explicit: true } }).instructions;
+    expect(out).toContain('- **efficiency**');
+    expect(out).not.toContain('- **correctness**');
+  });
+
+  it('honours an explicit min_confidence over the strictness default', () => {
+    const cfg = makeConfig({ review: { strictness: 5, min_confidence: 10 } });
+    const out = assemblePrompt({ mode: 'review', config: cfg, context, event, trigger: { mode: 'review', explicit: true } }).instructions;
+    expect(out).toContain('Do not report anything below 10');
+  });
+
+  it('appends configured exclusions and precedents to the built-in lists', () => {
+    const cfg = makeConfig({
+      review: { exclusions: ['Never comment on the legacy adapter.'], precedents: ['Our IDs are opaque.'] },
+    });
+    const out = assemblePrompt({ mode: 'review', config: cfg, context, event, trigger: { mode: 'review', explicit: true } }).instructions;
+    expect(out).toContain('Never comment on the legacy adapter.');
+    expect(out).toContain('Our IDs are opaque.');
+    // Built-ins survive alongside them rather than being replaced.
+    expect(out).toContain('Race conditions, TOCTOU');
+  });
+
+  it('leaves non-review modes untouched by the review prompt', () => {
+    const mention = assemble();
+    expect(mention).not.toContain('## Finding contract');
+    expect(mention).not.toContain('## Do not report');
+  });
+});
+
+describe('review-only context sections', () => {
+  const diff = [
+    'diff --git a/src/a.ts b/src/a.ts',
+    '--- a/src/a.ts',
+    '+++ b/src/a.ts',
+    '@@ -1,2 +1,3 @@',
+    ' const a = 1;',
+    '+const b = 2;',
+    ' const c = 3;',
+    '',
+  ].join('\n');
+  const changedFiles: ForgeChangedFile[] = [{ path: 'src/a.ts', status: 'modified', additions: 1, deletions: 0 }];
+
+  let dir: string;
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'crabd-assemble-'));
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    writeFileSync(join(dir, 'src/a.ts'), 'const a = 1;\nconst b = 2;\nconst c = 3;\n');
+  });
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  function message(mode: string, cwd?: string): string {
+    return assemblePrompt({
+      mode,
+      config: makeConfig(),
+      context: { repo, comments: [], changedFiles, diff } as ForgeContext,
+      event,
+      trigger: { mode, explicit: true },
+      ...(cwd ? { cwd } : {}),
+    }).message;
+  }
+
+  it('tells the review which lines it may anchor to', () => {
+    const out = message('review', dir);
+    expect(out).toContain('## Where you may anchor inline findings');
+    expect(out).toContain('`src/a.ts`: 1-3');
+  });
+
+  it('sends the changed file at HEAD with authoritative line numbers', () => {
+    const out = message('review', dir);
+    expect(out).toContain('## Changed files at HEAD (line-numbered)');
+    expect(out).toContain('authoritative line numbers');
+    expect(out).toContain('     1→const a = 1;');
+    expect(out).toContain('     3→const c = 3;');
+  });
+
+  it('omits the file-contents section when there is no checkout to read from', () => {
+    const out = message('review');
+    expect(out).not.toContain('## Changed files at HEAD');
+    // The anchoring section needs only the diff, so it still appears.
+    expect(out).toContain('## Where you may anchor inline findings');
+  });
+
+  it('adds neither section for a non-review mode', () => {
+    const out = message('mention', dir);
+    expect(out).not.toContain('## Where you may anchor inline findings');
+    expect(out).not.toContain('## Changed files at HEAD');
+  });
+
+  it('skips a file it cannot read rather than failing the run', () => {
+    const out = assemblePrompt({
+      mode: 'review',
+      config: makeConfig(),
+      context: {
+        repo,
+        comments: [],
+        changedFiles: [{ path: 'src/gone.ts', status: 'modified', additions: 1, deletions: 0 }],
+        diff,
+      } as ForgeContext,
+      event,
+      trigger: { mode: 'review', explicit: true },
+      cwd: dir,
+    }).message;
+    expect(out).not.toContain('## Changed files at HEAD');
+    expect(out).toContain('## Diff');
+  });
+
+  it('windows a large file around its hunks instead of sending the whole thing', () => {
+    const big = mkdtempSync(join(tmpdir(), 'crabd-big-'));
+    try {
+      mkdirSync(join(big, 'src'), { recursive: true });
+      // 4000 lines of ~14 chars each — comfortably past the whole-file limit.
+      const lines = Array.from({ length: 4_000 }, (_, i) => `const v${i} = ${i};`);
+      writeFileSync(join(big, 'src/big.ts'), `${lines.join('\n')}\n`);
+
+      const bigDiff = [
+        'diff --git a/src/big.ts b/src/big.ts',
+        '--- a/src/big.ts',
+        '+++ b/src/big.ts',
+        '@@ -2000,1 +2000,1 @@',
+        '+const v1999 = 1999;',
+        '',
+      ].join('\n');
+
+      const out = assemblePrompt({
+        mode: 'review',
+        config: makeConfig(),
+        context: {
+          repo,
+          comments: [],
+          changedFiles: [{ path: 'src/big.ts', status: 'modified', additions: 1, deletions: 0 }],
+          diff: bigDiff,
+        } as ForgeContext,
+        event,
+        trigger: { mode: 'review', explicit: true },
+        cwd: big,
+      }).message;
+
+      expect(out).toContain('window around the changes');
+      // The window is centred on the hunk and labelled with its true start line...
+      expect(out).toContain('lines 1960-2040:');
+      expect(out).toContain('  2000→const v1999 = 1999;');
+      // ...and lines far from the change are not sent.
+      expect(out).not.toContain('const v10 = 10;');
+    } finally {
+      rmSync(big, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('criticalReviewReminder', () => {
+  function reviewMessage(layer: CrabdConfigPartial = {}): string {
+    return assemblePrompt({
+      mode: 'review',
+      config: makeConfig(layer),
+      context,
+      event,
+      trigger: { mode: 'review', explicit: true },
+    }).message;
+  }
+
+  it('closes the review user turn with the non-negotiables', () => {
+    const message = reviewMessage();
+    expect(message).toContain('Before you answer, check each finding against the contract');
+    expect(message).toContain('confidence` of at least 7');
+    expect(message.trimEnd().endsWith('Zero findings is a valid and often correct answer.')).toBe(true);
+  });
+
+  it('tracks the configured confidence floor', () => {
+    expect(reviewMessage({ review: { min_confidence: 9 } })).toContain('confidence` of at least 9');
+  });
+
+  it('is omitted for modes with no finding contract to drift from', () => {
+    const message = assemblePrompt({ mode: 'mention', config: makeConfig(), context, event, trigger: { mode: 'mention', explicit: true } }).message;
+    expect(message).not.toContain('Before you answer, check each finding');
   });
 });
 
@@ -199,22 +448,27 @@ describe('compressDiff', () => {
     const out = compressDiff(sourceSection, changedFiles);
     expect(out).toContain('```diff');
     expect(out).toContain('const x = 1;');
-    // Nothing omitted → no trailing note.
-    expect(out).not.toContain('compressed or omitted');
+    // Nothing omitted → no trailing manifest.
+    expect(out).not.toContain('**Not fully shown above.**');
   });
 
   it('drops low-signal files (lockfiles) and lists them with their counts', () => {
     const out = compressDiff([sourceSection, lockSection].join('\n'), changedFiles);
     expect(out).toContain('const x = 1;'); // source kept
     expect(out).not.toContain('dep: 1.0.0'); // lockfile body dropped
-    expect(out).toContain('`pnpm-lock.yaml` (lockfile, +812/-40)');
+    expect(out).toContain('- `pnpm-lock.yaml` — lockfile, +812/-40');
   });
 
-  it('clips an oversized file to the hunks that fit and notes how many', () => {
+  it('clips an oversized file and names the line ranges it did not show', () => {
     const out = compressDiff(bigSection, changedFiles);
     expect(out).toContain('BIGLINE-0-'); // first hunk kept
     expect(out).not.toContain('BIGLINE-49-'); // last hunk clipped
-    expect(out).toMatch(/of 50 hunks shown/);
+    expect(out).toMatch(/of 50 hunks omitted/);
+    // The point of the change: the model is told *where* the gap is, not just how big it is.
+    expect(out).toMatch(/covering lines \d/);
+    expect(out).toContain('read the file at HEAD at the line ranges named below');
+    // And is steered away from a recovery path a shallow CI checkout cannot provide.
+    expect(out).toContain('do not try `git diff`');
   });
 
   it('stops once the global budget is spent and marks the rest not shown', () => {
@@ -253,7 +507,7 @@ describe('assemblePrompt — diff toggle', () => {
   it('compresses the diff by default (lockfile body dropped, omissions noted)', () => {
     const message = assemblePrompt({
       mode: 'review',
-      config: makeConfig({ modes: {}, review: { commentOnly: false, strictness: 2 } }),
+      config: makeConfig(),
       context: diffContext,
       event,
       trigger: { mode: 'review', explicit: true },
@@ -261,17 +515,28 @@ describe('assemblePrompt — diff toggle', () => {
     expect(message).toContain('## Diff');
     expect(message).toContain('const x = 1;');
     expect(message).not.toContain('dep: 1.0.0');
-    expect(message).toContain('compressed or omitted');
+    expect(message).toContain('**Not fully shown above.**');
+  });
+
+  it('does not offer low-signal files as anchor targets', () => {
+    const message = assemblePrompt({
+      mode: 'review',
+      config: makeConfig(),
+      context: diffContext,
+      event,
+      trigger: { mode: 'review', explicit: true },
+    }).message;
+    // The lockfile's diff body was dropped and the prompt forbids reviewing it, so inviting a
+    // finding anchored there would be contradictory.
+    expect(message).toContain('## Where you may anchor inline findings');
+    expect(message).toContain('- `src/auth.ts`:');
+    expect(message).not.toMatch(/- `pnpm-lock\.yaml`: /);
   });
 
   it('sends the full diff when context.full_diff is on', () => {
     const message = assemblePrompt({
       mode: 'review',
-      config: makeConfig({
-        modes: {},
-        review: { commentOnly: false, strictness: 2 },
-        context: { instructionFiles: true, skills: true, fullDiff: true },
-      }),
+      config: makeConfig({ context: { full_diff: true } }),
       context: diffContext,
       event,
       trigger: { mode: 'review', explicit: true },
@@ -346,5 +611,67 @@ describe('renderContext — bounded & deduped bodies', () => {
     const out = messageWith({ context: { comments: [trigger] }, event: { comment: trigger } });
     expect(out).not.toContain('## Recent comments');
     expect(out).toContain('## Triggering comment');
+  });
+});
+
+describe('renderContext — workspace state', () => {
+  function messageWithWorkspace(workspace?: WorkspaceState): string {
+    return assemblePrompt({
+      mode: 'review',
+      config,
+      context: { repo, comments: [], changedFiles: [], issue } as ForgeContext,
+      event,
+      trigger: { mode: 'review', explicit: true },
+      ...(workspace ? { workspace } : {}),
+    }).message;
+  }
+
+  const clean: WorkspaceState = {
+    branch: 'feat',
+    headSha: 'aaaa111',
+    status: '',
+    recentCommits: ['aaaa111 the change'],
+    expectedHeadSha: 'aaaa111',
+    matchesPrHead: true,
+  };
+
+  it('omits the workspace block when no state was resolved', () => {
+    expect(messageWithWorkspace()).not.toContain('## Workspace');
+  });
+
+  it('renders ref, HEAD, and commits without warning when the tree is the PR head', () => {
+    const out = messageWithWorkspace(clean);
+    expect(out).toContain('## Workspace');
+    expect(out).toContain('`feat`');
+    expect(out).toContain('aaaa111');
+    expect(out).toContain('Working tree is clean.');
+    expect(out).not.toContain('NOT this pull request');
+  });
+
+  it('warns loudly and names both shas when the tree is not the PR head', () => {
+    const out = messageWithWorkspace({ ...clean, headSha: 'bbbb222', matchesPrHead: false });
+    expect(out).toContain("**The working tree is NOT this pull request's head.**");
+    expect(out).toContain('do not trust anything you read from disk');
+    expect(out).toContain('bbbb222'); // what is checked out
+    expect(out).toContain('aaaa111'); // what should have been
+  });
+
+  it('does not warn when the match is simply unknown', () => {
+    const { matchesPrHead: _drop, ...unknown } = clean;
+    expect(messageWithWorkspace(unknown)).not.toContain('NOT this pull request');
+  });
+
+  it('reports a detached HEAD and an unclean tree', () => {
+    const { branch: _drop, ...detached } = clean;
+    const out = messageWithWorkspace({ ...detached, status: ' M src/a.ts' });
+    expect(out).toContain('(detached HEAD)');
+    expect(out).toContain('src/a.ts');
+    expect(out).not.toContain('Working tree is clean.');
+  });
+
+  it('truncates an oversized status block', () => {
+    const out = messageWithWorkspace({ ...clean, status: ` M ${'z'.repeat(2_500)}` });
+    expect(out).toContain('[truncated');
+    expect(out).not.toContain('z'.repeat(2_100));
   });
 });

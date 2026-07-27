@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadCrabdExtension } from '@crabd/config';
 import {
+  describeCommentableLines,
   finalizeRun,
   parseGitHubEvent,
   prepareRun,
@@ -121,9 +122,20 @@ function toFailureKind(kind: string): FailureKind {
   return (TAILORED_FAILURE_KINDS as readonly string[]).includes(kind) ? (kind as FailureKind) : 'error';
 }
 
+/** What the turn subprocess needs to run a mode's semantic self-check. See `ValidateContext`. */
+interface TurnValidation {
+  changedPaths: string[];
+  anchorable: { path: string; ranges: string[] }[];
+}
+
 /** Run `flue run workflow:crabd-turn` once and return the parsed structured result. */
-function runFlueTurn(mode: string, message: string, images: string[]): CrabdTurnResult {
-  const input = JSON.stringify({ mode, message, images });
+function runFlueTurn(
+  mode: string,
+  message: string,
+  images: string[],
+  validation?: TurnValidation,
+): CrabdTurnResult {
+  const input = JSON.stringify({ mode, message, images, ...(validation ? { validation } : {}) });
   const stdout = execFileSync(
     process.execPath,
     [flueCliEntry(), 'run', 'workflow:crabd-turn', '--input', input],
@@ -262,6 +274,15 @@ async function main(): Promise<number> {
   const { plan, context, trigger } = outcome;
   log(`mode=${plan.mode} model=${plan.model} subject=#${plan.subject}`);
 
+  // A checkout that isn't the PR head means the agent reads the wrong version of every file it
+  // opens. prepareRun already tried to correct it and told the model; make it loud in CI too,
+  // because the fix is in the consumer's workflow file, not in crab'd.
+  if (plan.workspace?.matchesPrHead === false) {
+    warn(
+      `the checkout is not this pull request's head (HEAD ${plan.workspace.headSha ?? 'unknown'}, PR head ${plan.workspace.expectedHeadSha ?? 'unknown'}) and could not be moved onto it — the review will be based on the diff alone. Set an explicit \`ref:\` on actions/checkout for comment triggers (see workflows/github/crabd.yml).`,
+    );
+  }
+
   // Hand the resolved dials to the Flue turn via env. max_turns is a HARD ceiling
   // enforced inside the turn (abort on tool-call count) — deliberately NOT injected
   // into the prompt, so the model isn't biased into finishing early.
@@ -275,6 +296,19 @@ async function main(): Promise<number> {
   // prepareRun (the classify pass needs it) — see applyProviderEnv above.
   if (config.mcp.length > 0) process.env.CRABD_MCP = JSON.stringify(config.mcp);
   process.env.CRABD_WEB_SEARCH = JSON.stringify(config.webSearch);
+  // The opt-in refutation pass. Only wire the diff through when it will actually be used — the
+  // refuters need it to know what changed, and it goes via a temp file because the turn input is a
+  // command-line argument that already carries the rendered prompt.
+  process.env.CRABD_REVIEW_VERIFY = JSON.stringify(config.review.verify);
+  if (config.review.verify.enabled && plan.mode === 'review' && context.diff) {
+    try {
+      const diffPath = join(tmpdir(), `crabd-diff-${plan.subject}.patch`);
+      writeFileSync(diffPath, context.diff, 'utf-8');
+      process.env.CRABD_DIFF_PATH = diffPath;
+    } catch (error) {
+      log(`review.verify: could not stage the diff, refuters will work from file contents only: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   // Branding for the comments the turn subprocess posts (progress + rate-limit updates).
   process.env.CRABD_BRANDING = JSON.stringify(config.appearance);
   // Rate-limit dials (backoff, fallback chain, wait budget). The turn subprocess
@@ -374,9 +408,17 @@ async function main(): Promise<number> {
 
   const runUrl = runUrlFromEnv();
 
+  // Anchorable lines travel as compact ranges rather than a second copy of the diff: the turn
+  // input is passed as a command-line argument, and the message already carries the diff plus the
+  // changed files' contents, so duplicating it risks an oversized argv.
+  const validation: TurnValidation = {
+    changedPaths: context.changedFiles.map((f) => f.path),
+    anchorable: context.diff ? describeCommentableLines(context.diff) : [],
+  };
+
   let turn: CrabdTurnResult;
   try {
-    turn = runFlueTurn(plan.mode, plan.message, images);
+    turn = runFlueTurn(plan.mode, plan.message, images, validation);
   } catch (error) {
     const raw = error instanceof Error ? error.message : String(error);
     log(`model turn failed: ${raw}`);
