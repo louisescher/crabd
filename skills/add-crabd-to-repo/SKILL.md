@@ -14,6 +14,10 @@ Set up crab'd on a repo that doesn't have it yet.
 
 Copy the matching starter from the crab'd repo's `workflows/` directory.
 
+Setting crab'd up across several Forgejo repos? Use `workflows/forgejo/crabd-reusable.yml` instead. 
+Read its header comment first: gating a job on
+`github.event_name` inside a reusable workflow silently never fires on Forgejo.
+
 ## 2. Choose identity (GitHub)
 
 Explain the options and pick with the user (see the Identity docs):

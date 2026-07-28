@@ -1,6 +1,8 @@
 # crab'd for Forgejo Actions.
 # Copy to `.forgejo/workflows/crabd.yml` in your repo.
 #
+# Rolling this out across several repos? See `crabd-reusable.yml` next to this file.
+#
 # Identity: Forgejo has no GitHub App equivalent, so crab'd acts as whatever bot
 # account owns CRABD_FORGEJO_TOKEN. Create a dedicated bot user, give it repo access,
 # and store its token as the CRABD_FORGEJO_TOKEN secret — its name/avatar become crab'd.

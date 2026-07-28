@@ -70,7 +70,8 @@ For a single repo without an App, the workflow's `GITHUB_TOKEN` works — but co
 ### Ready-made workflows
 
 Copy a starting workflow from the repo's [`workflows/`](https://github.com/louisescher/crabd/tree/main/workflows)
-directory: `workflows/github/crabd.yml` and `workflows/forgejo/crabd.yml`.
+directory: `workflows/github/crabd.yml`, `workflows/forgejo/crabd.yml`, and
+`workflows/forgejo/crabd-reusable.yml` for [one shared definition across an org](#reusable-workflows).
 
 ## Who can trigger crab'd
 
@@ -106,3 +107,50 @@ CRABD_FORGEJO_TOKEN: ${{ secrets.CRABD_FORGEJO_TOKEN }}
 ```
 
 Everything else (`.crabd.yml`, modes, providers, output schemas) is identical.
+
+### Reusable workflows
+
+To maintain one crab'd definition for a whole org, put it in a shared repo behind `on: workflow_call`
+and have each repo call it with a stub. Copy
+[`workflows/forgejo/crabd-reusable.yml`](https://github.com/louisescher/crabd/tree/main/workflows/forgejo/crabd-reusable.yml)
+into the shared repo, then add this to each consuming repo:
+
+```yaml title=".forgejo/workflows/crabd.yml"
+name: crab'd
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  crabd:
+    uses: your-org/workflows/.forgejo/workflows/crabd.yml@main
+    secrets: inherit
+```
+
+The stub owns the triggers, the shared file owns the behavior. Store the bot token and provider key as
+**org-level** secrets so `secrets: inherit` can reach them.
+
+One trap is worth knowing about, because it fails silently:
+
+:::caution
+**Never gate a job in a reusable workflow on `github.event_name`.** Forgejo reports `workflow_call`
+for the inner jobs of an expanded reusable workflow. It does this
+deliberately, to make `on.workflow_call.inputs` resolve. GitHub does the opposite and keeps the
+original trigger, so a condition like `github.event_name == 'pull_request'` works there and is
+**never true** on Forgejo: the job reports `skipped` on every trigger, while its parent job still
+reports success, so nothing looks broken.
+
+Branch on the event **payload** instead, which is passed through untouched:
+
+```yaml
+# instead of: github.event_name == 'pull_request'
+if: github.event.pull_request && !github.event.comment
+```
+:::
+
+crab'd itself is not affected. When Forgejo hands it `workflow_call` it recovers the event kind from
+the payload shape. The caveat applies to conditions *you* write in the workflow.

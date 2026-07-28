@@ -76,14 +76,14 @@ Set by the CI runner; crab'd reads them. You rarely set these yourself.
 
 | Variable | Description |
 | --- | --- |
-| `GITHUB_EVENT_NAME` / `GITHUB_EVENT_PATH` | The event kind and payload file. |
+| `GITHUB_EVENT_NAME` / `GITHUB_EVENT_PATH` | The event kind and payload file. When the name is `workflow_call` (what Forgejo reports inside a [reusable workflow](/self-hosting/#reusable-workflows)), crab'd recovers the kind from the payload. |
 | `GITHUB_WORKSPACE` | The checked-out repo path (the agent's sandbox root). |
 | `GITHUB_TOKEN` | Fallback forge token. |
 | `GITHUB_API_URL` / `GITHUB_SERVER_URL` | API / server base URLs. |
 | `GITHUB_OUTPUT` | File crab'd writes its `mode` / `result` / `summary` outputs to. |
 | `FORGEJO_ACTIONS` | Present on Forgejo runners; aids forge auto-detection. |
 | `ACTIONS_ID_TOKEN_REQUEST_URL` / `ACTIONS_ID_TOKEN_REQUEST_TOKEN` | OIDC minting endpoint (requires `permissions: id-token: write`). |
-| `CRABD_EVENT_NAME` / `CRABD_EVENT_PATH` | Override the event source (useful outside Actions). |
+| `CRABD_EVENT_NAME` / `CRABD_EVENT_PATH` | Override the event source, taking precedence over the `GITHUB_*` pair (useful outside Actions, or to force the kind when a wrapper workflow obscures it). |
 
 ## Broker service
 

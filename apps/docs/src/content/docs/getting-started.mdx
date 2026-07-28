@@ -41,6 +41,9 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.issue.pull_request && format('refs/pull/{0}/merge', github.event.issue.number) || '' }}
+          fetch-depth: 0
       - uses: louisescher/crabd@v0
         with:
           model: anthropic/claude-sonnet-4-6
@@ -71,6 +74,9 @@ jobs:
     runs-on: docker
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.issue.pull_request && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
+          fetch-depth: 0
       - uses: https://github.com/louisescher/crabd@v0
         with:
           forge: forgejo

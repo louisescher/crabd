@@ -1,0 +1,31 @@
+# crab'd as a reusable workflow for Forgejo Actions.
+# Caller stub and setup notes: https://crabd.lou.gg/self-hosting/#reusable-workflows
+name: crab'd
+on:
+  workflow_call:
+
+jobs:
+  crabd:
+    # Gating on github.event_name never fires here, see the docs link above.
+    if: >-
+      !endsWith(github.actor, '[bot]') &&
+      (
+        (github.event.pull_request && !github.event.comment)
+        ||
+        (github.event.comment && (github.event.pull_request || github.event.issue.pull_request))
+      )
+    runs-on: docker
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.issue.pull_request && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
+          fetch-depth: 0
+      - uses: https://github.com/louisescher/crabd@v0
+        with:
+          forge: forgejo
+          model: anthropic/claude-sonnet-4-6
+          providers: anthropic
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CRABD_FORGEJO_API_URL: ${{ github.server_url }}/api/v1
+          CRABD_FORGEJO_TOKEN: ${{ secrets.CRABD_FORGEJO_TOKEN }}

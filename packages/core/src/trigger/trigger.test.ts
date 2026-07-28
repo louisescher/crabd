@@ -171,4 +171,67 @@ describe('parseGitHubEvent', () => {
   it('throws when repository owner/name is missing', () => {
     expect(() => parseGitHubEvent('issues', { action: 'opened', issue: {} })).toThrow(/repository/);
   });
+
+  describe('workflow_call (Forgejo reusable workflows)', () => {
+    const repository = { name: 'app', full_name: 'acme/app', owner: { login: 'acme' }, default_branch: 'main' };
+
+    it('recovers pull_request from the payload', () => {
+      const ev = parseGitHubEvent('workflow_call', {
+        action: 'opened',
+        repository,
+        sender: { login: 'dev', type: 'User' },
+        pull_request: { number: 7, title: 'Add divide', head: { ref: 'feat', sha: 'abc' }, base: { ref: 'main' } },
+      }, 'forgejo');
+      expect(ev?.kind).toBe('pull_request');
+      expect(ev?.action).toBe('opened');
+      expect(ev?.pullRequest?.number).toBe(7);
+    });
+
+    it('recovers issue_comment on a PR from the payload', () => {
+      const ev = parseGitHubEvent('workflow_call', {
+        action: 'created',
+        repository,
+        sender: { login: 'dev', type: 'User' },
+        comment: { id: 9, body: '@crabd review', user: { login: 'dev' } },
+        issue: { number: 5, title: 'Bug', pull_request: { url: 'x' } },
+      }, 'forgejo');
+      expect(ev?.kind).toBe('issue_comment');
+      expect(ev?.isPullRequest).toBe(true);
+      expect(ev?.comment?.body).toBe('@crabd review');
+    });
+
+    it('recovers pull_request_review_comment from the payload', () => {
+      const ev = parseGitHubEvent('workflow_call', {
+        action: 'created',
+        repository,
+        sender: { login: 'dev', type: 'User' },
+        comment: { id: 9, body: '@crabd this line', user: { login: 'dev' } },
+        pull_request: { number: 7, title: 'Add divide', head: { ref: 'feat', sha: 'abc' }, base: { ref: 'main' } },
+      }, 'forgejo');
+      expect(ev?.kind).toBe('pull_request_review_comment');
+    });
+
+    it('recovers issues from the payload', () => {
+      const ev = parseGitHubEvent('workflow_call', {
+        action: 'labeled',
+        repository,
+        sender: { login: 'dev', type: 'User' },
+        issue: { number: 5, title: 'Bug', labels: [{ name: 'crabd' }] },
+      }, 'forgejo');
+      expect(ev?.kind).toBe('issues');
+    });
+
+    it('stays null when the payload matches no handled event', () => {
+      expect(parseGitHubEvent('workflow_call', {
+        repository,
+        sender: { login: 'dev', type: 'User' },
+        ref: 'refs/heads/main',
+        commits: [{ id: 'abc' }],
+      }, 'forgejo')).toBeNull();
+    });
+
+    it('does not infer for other unhandled event names', () => {
+      expect(parseGitHubEvent('push', { repository, pull_request: { number: 7 } })).toBeNull();
+    });
+  });
 });
