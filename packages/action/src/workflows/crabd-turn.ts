@@ -327,7 +327,7 @@ const MAX_REPAIR_ATTEMPTS = 2;
 const WRAP_UP_INSTRUCTION = [
   'You have reached the tool-call budget for this run and can no longer use tools — any further tool call will end the run immediately.',
   'Do not call any tools. Based only on what you have already gathered, produce your final structured answer now.',
-  'If you could not fully complete the task, give your best partial answer: summarize what you found and verified, and clearly call out what remains unresolved. Since you can no longer make changes, set any "made changes" / edit flags to false.',
+  'If you could not fully complete the task, give your best partial answer: summarize what you found and verified, and clearly call out what remains unresolved. Name what is unresolved in terms of the code ("the callers of `parseLimit` are unchecked"), never in terms of this run, your budget, or your instructions. Since you can no longer make changes, set any "made changes" / edit flags to false.',
 ].join('\n');
 
 /**

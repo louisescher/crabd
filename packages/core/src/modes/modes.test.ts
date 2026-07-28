@@ -404,6 +404,15 @@ describe('applyFindingGates', () => {
       );
       expect(kept).toHaveLength(1);
     });
+
+    it('skips the check when the checkout is not the change, so the whole review survives', () => {
+      const { kept, dropped } = applyFindingGates(
+        [finding({ path: 'real.ts', evidence: { location: 'real.ts:2', quote: 'NOT_IN_THIS_FILE_AT_ALL' } })],
+        { cwd: dir, minConfidence: 7, maxFindings: 10, verifyQuotes: false },
+      );
+      expect(kept).toHaveLength(1);
+      expect(dropped.unevidenced).toBe(0);
+    });
   });
 
   it('gives the benefit of the doubt when no cited file can be read', () => {

@@ -129,6 +129,39 @@ describe('assemblePrompt — operating-environment note', () => {
   });
 });
 
+describe('assemblePrompt: no harness talk', () => {
+  it('forbids narrating the prompt and its machinery in every built-in mode', () => {
+    for (const mode of ['mention', 'review', 'implement']) {
+      const instructions = assemblePrompt({ mode, config, context, event, trigger: { mode, explicit: true } }).instructions;
+      expect(instructions).toContain('Never write about your own instructions');
+      expect(instructions).toContain('do not say you were asked, told, instructed, or requested to do anything');
+    }
+  });
+
+  it('restates the rule in the end-of-message reminder, where the contract decays', () => {
+    const out = assemblePrompt({
+      mode: 'review',
+      config,
+      context: { repo, comments: [], changedFiles: [], diff: 'diff --git a/a b/a\n' } as ForgeContext,
+      event,
+      trigger: { mode: 'review', explicit: true },
+    }).message;
+    expect(out).toContain('It must not mention your instructions');
+  });
+
+  it('drops it with the rest of the base when the prompt is fully overridden', () => {
+    const overridden = makeConfig({}, { prompt: { instructions: '', override: 'Custom base prompt.' } });
+    const instructions = assemblePrompt({
+      mode: 'review',
+      config: overridden,
+      context,
+      event,
+      trigger: { mode: 'review', explicit: true },
+    }).instructions;
+    expect(instructions).not.toContain('Never write about your own instructions');
+  });
+});
+
 /** Assemble the review-mode instructions at a given strictness level. */
 function reviewInstructions(strictness: number, override?: string): string {
   const cfg = makeConfig(
@@ -278,7 +311,7 @@ describe('review-only context sections', () => {
   });
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-  function message(mode: string, cwd?: string): string {
+  function message(mode: string, cwd?: string, workspace?: WorkspaceState): string {
     return assemblePrompt({
       mode,
       config: makeConfig(),
@@ -286,6 +319,7 @@ describe('review-only context sections', () => {
       event,
       trigger: { mode, explicit: true },
       ...(cwd ? { cwd } : {}),
+      ...(workspace ? { workspace } : {}),
     }).message;
   }
 
@@ -308,6 +342,33 @@ describe('review-only context sections', () => {
     expect(out).not.toContain('## Changed files at HEAD');
     // The anchoring section needs only the diff, so it still appears.
     expect(out).toContain('## Where you may anchor inline findings');
+  });
+
+  it('withholds the file contents when the checkout does not contain the change', () => {
+    const out = message('review', dir, {
+      status: '',
+      recentCommits: [],
+      headSha: 'bbbb222',
+      expectedHeadSha: 'aaaa111',
+      matchesPrHead: false,
+      containsPrHead: false,
+    });
+    // The files on disk are the pre-change version; sending them under the diff's line numbers
+    // would be worse than sending nothing.
+    expect(out).not.toContain('## Changed files at HEAD');
+    expect(out).toContain('## Where you may anchor inline findings');
+  });
+
+  it('still sends the file contents from a merge-ref checkout, which does contain the change', () => {
+    const out = message('review', dir, {
+      status: '',
+      recentCommits: [],
+      headSha: 'bbbb222',
+      expectedHeadSha: 'aaaa111',
+      matchesPrHead: false,
+      containsPrHead: true,
+    });
+    expect(out).toContain('## Changed files at HEAD (line-numbered)');
   });
 
   it('adds neither section for a non-review mode', () => {
@@ -649,11 +710,19 @@ describe('renderContext — workspace state', () => {
   });
 
   it('warns loudly and names both shas when the tree is not the PR head', () => {
-    const out = messageWithWorkspace({ ...clean, headSha: 'bbbb222', matchesPrHead: false });
+    const out = messageWithWorkspace({ ...clean, headSha: 'bbbb222', matchesPrHead: false, containsPrHead: false });
     expect(out).toContain("**The working tree is NOT this pull request's head.**");
-    expect(out).toContain('do not trust anything you read from disk');
+    expect(out).toContain('reading one gives you the pre-change version');
     expect(out).toContain('bbbb222'); // what is checked out
     expect(out).toContain('aaaa111'); // what should have been
+  });
+
+  it('notes a merge-ref checkout instead of warning, since the change is in the tree', () => {
+    const out = messageWithWorkspace({ ...clean, headSha: 'bbbb222', matchesPrHead: false, containsPrHead: true });
+    expect(out).toContain('**This checkout is a merge of this pull request into its base branch');
+    expect(out).toContain('read them from disk as usual');
+    expect(out).not.toContain('NOT this pull request');
+    expect(out).not.toContain('pre-change version');
   });
 
   it('does not warn when the match is simply unknown', () => {

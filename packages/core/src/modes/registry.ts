@@ -1,6 +1,7 @@
 import type * as v from 'valibot';
 import type { ResolvedConfig } from '@crabd/config';
 import type { ForgeAdapter, ForgeContext, ForgeEvent } from '../forge/types.ts';
+import type { WorkspaceState } from '../git/workspace.ts';
 import type { TriggerResult } from '../trigger/detect.ts';
 
 /** Context handed to a mode's `finalize` step, after the model returns structured data. */
@@ -14,6 +15,11 @@ export interface FinalizeContext<T = unknown> {
   data: T;
   /** Working directory of the checked-out repo (the `local()` sandbox root). */
   cwd: string;
+  /**
+   * Resolved VCS state of that checkout. Modes that check the model's output against the files on
+   * disk need it to know whether those files are the change under review at all.
+   */
+  workspace?: WorkspaceState;
 }
 
 export interface FinalizeResult {

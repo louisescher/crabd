@@ -31,7 +31,16 @@ export async function finalizeRun(input: FinalizeInput): Promise<FinalizeResult>
   if (!mode) throw new Error(`crabd: no mode registered for "${plan.mode}"`);
 
   try {
-    const result = await mode.finalize({ adapter, config, event, context, trigger, data, cwd });
+    const result = await mode.finalize({
+      adapter,
+      config,
+      event,
+      context,
+      trigger,
+      data,
+      cwd,
+      ...(plan.workspace ? { workspace: plan.workspace } : {}),
+    });
     await adapter.updateTrackingComment(
       plan.tracking,
       // Use the mode's short tracking text when it posted its detail elsewhere (e.g. a PR review).
