@@ -39,6 +39,16 @@ export interface WorkspaceState {
    * to compare against (an issue event) or when either sha could not be resolved.
    */
   matchesPrHead?: boolean;
+  /**
+   * Whether the checkout *contains* the pull request's head, even when {@link headSha} isn't it.
+   *
+   * The case that matters is `refs/pull/N/merge`, the ref both forges hand you by default on a
+   * `pull_request` event, and what the workflow templates used to ask for on `issue_comment`. Its
+   * sha is a merge commit, so it never equals the PR head, but the changes under review *are* in
+   * the tree. Treating that as "wrong checkout" is what made crab'd review from the diff alone
+   * while sitting on a perfectly good workspace.
+   */
+  containsPrHead?: boolean;
   /** The PR head sha this state was compared against, when one was supplied. */
   expectedHeadSha?: string;
 }
@@ -63,26 +73,48 @@ export function resolveWorkspace(cwd: string, expectedHeadSha?: string): Workspa
 
   if (expectedHeadSha) {
     state.expectedHeadSha = expectedHeadSha;
-    if (headSha) state.matchesPrHead = headSha === expectedHeadSha;
+    if (headSha) {
+      state.matchesPrHead = headSha === expectedHeadSha;
+      // `--is-ancestor` exits 0 when the PR head is reachable from HEAD, which covers both the
+      // merge-ref checkout and a tree that has moved on past the head commit. It exits non-zero
+      // when the object isn't there at all, so a shallow checkout answers "no" rather than lying.
+      state.containsPrHead =
+        state.matchesPrHead || tryGit(['merge-base', '--is-ancestor', expectedHeadSha, 'HEAD'], cwd) !== undefined;
+    }
   }
   return state;
+}
+
+/** Detach onto a sha, reporting whether HEAD actually ended up there. */
+function detachOnto(cwd: string, headSha: string): boolean {
+  if (tryGit(['checkout', '--detach', headSha], cwd) === undefined) return false;
+  return tryGit(['rev-parse', 'HEAD'], cwd) === headSha;
 }
 
 /**
  * Best-effort: move the checkout onto the pull request's head commit.
  *
- * Tries fetching the sha directly first (works on GitHub and Forgejo when the server allows
- * fetching arbitrary objects), then the `refs/pull/N/head` ref, which is what a shallow CI
+ * Checks for the commit locally first: on the merge-ref checkout that both forges default to, the
+ * PR head is a parent of the commit already in the tree, so this is a pure `git checkout` with no
+ * network involved. Only then does it fetch: the sha directly (works on GitHub and Forgejo when the
+ * server allows fetching arbitrary objects), then `refs/pull/N/head`, which is what a shallow CI
  * checkout can usually reach. Returns whether the checkout now sits on `headSha`. Never throws —
  * a failure leaves the tree as it was and is reported in the prompt instead.
  *
- * Refuses to touch a dirty tree. A consumer's workflow may legitimately have produced files
- * before the crab'd step (a build, a codegen step, a restored cache), and silently discarding
- * those to fix our own ref is a worse outcome than reviewing from the diff and saying so. The
- * checkout is deliberately *not* forced for the same reason.
+ * Refuses to move a tree with *tracked* modifications. A consumer's workflow may legitimately have
+ * produced files before the crab'd step (a build, a codegen step, a restored cache), and silently
+ * discarding those to fix our own ref is a worse outcome than reviewing from the diff and saying
+ * so. The checkout is deliberately *not* forced for the same reason. Untracked files are ignored
+ * here because a non-forced checkout leaves them alone: refusing on those meant one stray artifact
+ * in the workspace (a cloud-auth step's credentials file, say) blocked the fix for no reason.
  */
 export function checkoutPrHead(cwd: string, headSha: string, prNumber?: number): boolean {
-  if ((tryGit(['status', '--short'], cwd) ?? '').trim()) return false;
+  if ((tryGit(['status', '--porcelain', '--untracked-files=no'], cwd) ?? '').trim()) return false;
+
+  // Already in the object store (merge-ref checkout, or full history of the head branch).
+  if (tryGit(['rev-parse', '--verify', '--quiet', `${headSha}^{commit}`], cwd) && detachOnto(cwd, headSha)) {
+    return true;
+  }
 
   const attempts: string[][] = [['fetch', '--depth=1', 'origin', headSha]];
   if (prNumber !== undefined) {
@@ -92,8 +124,7 @@ export function checkoutPrHead(cwd: string, headSha: string, prNumber?: number):
   for (const fetch of attempts) {
     if (tryGit(fetch, cwd) === undefined) continue;
     // Detach onto the sha itself rather than FETCH_HEAD so the result is unambiguous.
-    if (tryGit(['checkout', '--detach', headSha], cwd) === undefined) continue;
-    if (tryGit(['rev-parse', 'HEAD'], cwd) === headSha) return true;
+    if (detachOnto(cwd, headSha)) return true;
   }
   return false;
 }

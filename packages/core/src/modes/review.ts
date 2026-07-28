@@ -156,7 +156,18 @@ interface DroppedCounts {
  */
 export function applyFindingGates(
   findings: ReviewFinding[],
-  options: { cwd: string; minConfidence: number; maxFindings: number },
+  options: {
+    cwd: string;
+    minConfidence: number;
+    maxFindings: number;
+    /**
+     * Whether the files on disk are the change under review. When they are not (a checkout that
+     * could not be moved onto the PR head), every quote from an added line is absent from the
+     * pre-change file, so the evidence gate would discard the entire review for lying when the
+     * only thing wrong is the workspace. Skip it there and let confidence carry the weight.
+     */
+    verifyQuotes?: boolean;
+  },
 ): { kept: ReviewFinding[]; dropped: DroppedCounts } {
   const dropped: DroppedCounts = { lowConfidence: 0, unevidenced: 0, truncated: 0 };
 
@@ -166,7 +177,7 @@ export function applyFindingGates(
       dropped.lowConfidence++;
       continue;
     }
-    if (!quoteIsReal(options.cwd, finding)) {
+    if (options.verifyQuotes !== false && !quoteIsReal(options.cwd, finding)) {
       dropped.unevidenced++;
       continue;
     }
@@ -317,6 +328,7 @@ export const reviewMode: ModeDefinition<ReviewOutput> = {
       cwd: ctx.cwd,
       minConfidence: ctx.config.review.minConfidence,
       maxFindings: ctx.config.review.maxFindings,
+      verifyQuotes: ctx.workspace?.containsPrHead !== false,
     });
 
     // Anchor only findings that land inside a changed hunk; the rest are folded into the review

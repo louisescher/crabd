@@ -278,9 +278,15 @@ async function main(): Promise<number> {
   // opens. prepareRun already tried to correct it and told the model; make it loud in CI too,
   // because the fix is in the consumer's workflow file, not in crab'd.
   if (plan.workspace?.matchesPrHead === false) {
-    warn(
-      `the checkout is not this pull request's head (HEAD ${plan.workspace.headSha ?? 'unknown'}, PR head ${plan.workspace.expectedHeadSha ?? 'unknown'}) and could not be moved onto it — the review will be based on the diff alone. Set an explicit \`ref:\` on actions/checkout for comment triggers (see workflows/github/crabd.yml).`,
-    );
+    const where = `HEAD ${plan.workspace.headSha ?? 'unknown'}, PR head ${plan.workspace.expectedHeadSha ?? 'unknown'}`;
+    // A merge-ref checkout still contains the change, so it's a note, not a warning.
+    if (plan.workspace.containsPrHead) {
+      log(`checkout is a merge of this pull request into its base rather than its head (${where}); the changes are present`);
+    } else {
+      warn(
+        `the checkout is not this pull request's head (${where}) and could not be moved onto it, so the review will be based on the diff alone. Set an explicit \`ref:\` on actions/checkout for comment triggers (see workflows/github/crabd.yml).`,
+      );
+    }
   }
 
   // Hand the resolved dials to the Flue turn via env. max_turns is a HARD ceiling

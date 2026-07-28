@@ -176,10 +176,12 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
   // can; when we can't, the mismatch rides through to the prompt so the model is told rather
   // than left to trust the wrong files. Deliberately ordered before `loadProjectContext` so the
   // repo's own AGENTS.md/CLAUDE.md is read from the PR head too.
-  const workspace = resolveWorkspace(cwd, context.pullRequest?.headSha || undefined);
+  let workspace = resolveWorkspace(cwd, context.pullRequest?.headSha || undefined);
   if (workspace.matchesPrHead === false && context.pullRequest) {
-    const moved = checkoutPrHead(cwd, context.pullRequest.headSha, context.pullRequest.number);
-    if (moved) Object.assign(workspace, resolveWorkspace(cwd, context.pullRequest.headSha));
+    // Re-resolve rather than merge: the move detaches HEAD, so the previous `branch` must go.
+    if (checkoutPrHead(cwd, context.pullRequest.headSha, context.pullRequest.number)) {
+      workspace = resolveWorkspace(cwd, context.pullRequest.headSha);
+    }
   }
 
   // Repo-authored context: the target repo's own AGENTS.md/CLAUDE.md and skill manifest,

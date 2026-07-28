@@ -25,13 +25,14 @@ jobs:
       issues: write
       id-token: write
     steps:
-      # `ref:` matters on `issue_comment`: that event's default SHA is the base branch, so a bare
-      # checkout would leave the runner on main and crab'd would review files that don't contain
-      # the change. `refs/pull/N/merge` is the PR as it would land; for `pull_request` events the
-      # default checkout is already correct, so the expression falls through to empty.
+      # `ref:` matters: crab'd reviews the pull request's HEAD commit, and neither event gives you
+      # that by default. On `issue_comment` the default SHA is the base branch; on `pull_request`
+      # it's the merge commit, whose sha is not the PR head. Check out the head explicitly so the
+      # files on disk are exactly what the diff describes. (crab'd self-corrects at runtime when it
+      # can, and tells the model when it can't, but starting on the right commit is cheaper.)
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.issue.pull_request && format('refs/pull/{0}/merge', github.event.issue.number) || '' }}
+          ref: ${{ github.event.pull_request.head.sha || (github.event.issue.pull_request && format('refs/pull/{0}/head', github.event.issue.number)) || '' }}
           fetch-depth: 0
       - uses: louisescher/crabd@v0
         with:

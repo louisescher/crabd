@@ -16,9 +16,11 @@ jobs:
       )
     runs-on: docker
     steps:
+      # The PR head, explicitly: neither event checks it out by default (base branch on
+      # `issue_comment`, the merge ref on `pull_request`).
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.issue.pull_request && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
+          ref: ${{ github.event.pull_request.head.sha || (github.event.issue.pull_request && format('refs/pull/{0}/head', github.event.issue.number)) || '' }}
           fetch-depth: 0
       - uses: https://github.com/louisescher/crabd@v0
         with:

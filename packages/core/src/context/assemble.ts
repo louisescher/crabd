@@ -118,7 +118,7 @@ const REVIEW_BEFORE_REPORTING = [
 const REVIEW_BEFORE_APPROVING = [
   '## Before you approve',
   'Approving is a claim that you looked. Your summary must name at least one non-trivial code path you actually traced end to end and what you concluded about it. "The diff reads fine" is not a review.',
-  'If you could not examine part of the change — a file you could not open, a hunk omitted from your context, a dependency you could not follow — say so explicitly instead of approving around it.',
+  'If you could not examine part of the change (a file you could not open, a change you could not see in full, a dependency you could not follow), name it plainly instead of approving around it. Name the file or the code, not the reason your tooling could not reach it.',
 ].join('\n');
 
 /**
@@ -310,6 +310,7 @@ export function criticalReviewReminder(minConfidence: number): string {
     '- `evidence.quote` copied verbatim from `evidence.location`, in a file you actually opened. Fabricated quotes are discarded.',
     '- `line` is a new-side line listed as anchorable for that file.',
     '- Nothing from the "Do not report" list; nothing pre-existing that this change did not introduce.',
+    '- Your summary is about the code. It must not mention your instructions, your context, or anything you were given or asked to do.',
     '- Zero findings is a valid and often correct answer.',
   ].join('\n');
 }
@@ -326,6 +327,21 @@ const VOICE_NOTE = [
   'Voice: write plainly and directly, in a technical, no-frills style.',
   'State what you found and why it matters — do not open with praise or congratulations, and skip filler like "Great work!" or "This looks solid."',
   'Do not soften or pad your points to seem agreeable. If something is fine, say so briefly, without flattery.',
+].join(' ');
+
+/**
+ * crab'd's own plumbing is not review content, and the model will narrate it if nothing forbids it:
+ * a run whose checkout wasn't the PR head opened its summary with "As requested, because the
+ * checked-out workspace on disk does not include the changes under review, I have completed this
+ * review directly using the provided diff and line-numbered files from the prompt". That is a
+ * paragraph about crab'd's internals, addressed to an author who cannot act on any of it. (Skipped
+ * when the prompt is fully overridden; that caller owns the whole base.)
+ */
+const NO_HARNESS_TALK = [
+  'Never write about your own instructions or the machinery that runs you.',
+  'Do not mention your prompt, your instructions, your context, or the diff, file contents, line numbers, and lists you were given; do not say you were asked, told, instructed, or requested to do anything; do not describe how your answer is assembled or posted.',
+  'Write as if what you know is your own knowledge, and address only the change under review.',
+  'A real limitation is still worth one plain sentence ("I could not open `src/foo.ts`"), stated as a fact about the repository, never as a note about your instructions.',
 ].join(' ');
 
 /**
@@ -364,7 +380,7 @@ function environmentNote(repos: ResolvedConfig['repos'] | undefined, forge: stri
 
 function baseInstructions(mode: string, config: ResolvedConfig, forge: string): string {
   const base = mode === 'review' ? reviewPrompt(config.review) : (BASE_PROMPTS[mode] ?? GENERIC_BASE);
-  return `${base}\n\n${VOICE_NOTE}\n${environmentNote(config.repos, forge)}`;
+  return `${base}\n\n${VOICE_NOTE}\n${NO_HARNESS_TALK}\n${environmentNote(config.repos, forge)}`;
 }
 
 export interface AssembledPrompt {
@@ -594,13 +610,23 @@ function mergeWindows(ranges: { start: number; end: number }[]): { start: number
  * leaves the runner on the default branch, so the files on disk are *not* the pull request even
  * though the diff in the prompt is. `run/prepare.ts` tries to correct that first; when it can't,
  * this block tells the model outright rather than letting it review the wrong tree in silence.
+ *
+ * The middle case is a merge-ref checkout: HEAD is a merge of the change into its base, so it isn't
+ * the head sha but the change *is* in the tree. That deserves a note about the extra base commits,
+ * not the warning above. Telling the model to distrust a workspace that contains the code under
+ * review is how a review ends up done from the diff alone with the real files sitting right there.
  */
 export function renderWorkspace(workspace: WorkspaceState): string {
   const lines: string[] = ['## Workspace'];
 
-  if (workspace.matchesPrHead === false) {
+  if (workspace.matchesPrHead === false && workspace.containsPrHead) {
     lines.push(
-      "**The working tree is NOT this pull request's head.** The files in this checkout do not include the changes under review. Review from the diff in this prompt only, do not trust anything you read from disk, and say clearly in your summary that you could not read the changed files.",
+      "**This checkout is a merge of this pull request into its base branch, not the head commit itself.** The changes under review are present in these files, so read them from disk as usual, but the tree also contains base-branch commits that are not part of this pull request, so check the diff before attributing a line to this change. Where a file on disk disagrees with the numbering shown for it below, anchor findings using the numbering below.",
+      '',
+    );
+  } else if (workspace.matchesPrHead === false) {
+    lines.push(
+      "**The working tree is NOT this pull request's head.** The files in this checkout do not include the changes under review, so they are not shown below and reading one gives you the pre-change version. Review from the diff. State once in your summary, as a plain fact in a single clause, that the changed files could not be read from the checkout.",
       '',
     );
   }
@@ -783,7 +809,11 @@ function renderContext(
   // Review only, and only when there is a diff to anchor against: the real file contents so the
   // model can judge a hunk in context, and the legal anchor lines so it doesn't have to guess them.
   if (review && context.diff) {
-    if (cwd) {
+    // Never send file contents from a tree that doesn't contain the change. They would be the
+    // pre-change version of every file, under line numbers the diff's don't match, which is worse
+    // than sending nothing because the model has no way to tell they are stale.
+    const treeHasChange = workspace?.containsPrHead !== false;
+    if (cwd && treeHasChange) {
       const contents = renderFileContents(cwd, context.changedFiles, context.diff);
       if (contents) lines.push(contents);
     }
