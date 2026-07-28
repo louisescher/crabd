@@ -114,3 +114,21 @@ explicit `token_env` there.
 A failure that doesn't fall into the categories above. The comment includes a collapsed **Error
 details** block and a link to the run logs — start there. If it looks like a bug in crab'd, please
 [open an issue](https://github.com/louisescher/crabd/issues).
+
+## Nothing happened at all
+
+No comment, no 👀 reaction, no failure message. crab'd posts a comment for every failure it can
+attribute, so silence means it never got far enough to have anything to say. In order of likelihood:
+
+- **The job never ran.** Check the run in your forge's Actions tab. A job showing `skipped` means its
+  `if:` was false, not that crab'd declined. Note that in a Forgejo reusable workflow the parent
+  job still reports **success** when the inner job skips, so the run looks green. See the
+  [`github.event_name` caveat](/self-hosting/#reusable-workflows).
+- **The event isn't one crab'd handles.** The logs end with `event "…" is not handled. Skipping.`
+  crab'd acts on `pull_request`, `issue_comment`, `pull_request_review_comment`, and `issues` only.
+  A `push`, for example, is a deliberate no-op.
+- **No trigger matched.** A comment must contain the trigger phrase, and a `pull_request` only
+  auto-reviews on `opened` / `reopened` / `ready_for_review`, not on a push to the branch. Mention
+  `/crabd review` to re-review.
+- **The actor was filtered.** Bots never trigger crab'd (to avoid comment loops), and the actor's
+  association must be in [`permissions.allowed_associations`](/self-hosting/#who-can-trigger-crabd).

@@ -17,4 +17,5 @@ For more information, read the [documentation](https://crabd.lou.gg).
 ```
 
 crab'd ships as a **Docker action** (`ghcr.io/louisescher/crabd`). See
-`workflows/github/crabd.yml` and `workflows/forgejo/crabd.yml` for full examples.
+`workflows/github/crabd.yml` and `workflows/forgejo/crabd.yml` for full examples, or
+`workflows/forgejo/crabd-reusable.yml` for one shared definition across an org.

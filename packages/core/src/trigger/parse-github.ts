@@ -56,6 +56,18 @@ const EVENT_KINDS: Record<string, ForgeEventKind> = {
   pull_request: 'pull_request',
 };
 
+/** Recover the kind from the payload when the event name is unusable. Null if it matches nothing. */
+function inferKindFromPayload(p: RawPayload): ForgeEventKind | null {
+  if (p.comment) {
+    if (p.pull_request) return 'pull_request_review_comment';
+    if (p.issue) return 'issue_comment';
+    return null;
+  }
+  if (p.pull_request) return 'pull_request';
+  if (p.issue) return 'issues';
+  return null;
+}
+
 function labelNames(labels: RawIssue['labels']): string[] {
   if (!labels) return [];
   return labels.map((l) => (typeof l === 'string' ? l : (l.name ?? ''))).filter(Boolean);
@@ -97,13 +109,16 @@ function buildRepo(raw: RawRepo | undefined): ForgeRepo {
 
 /**
  * Normalize a GitHub (or Forgejo, GitHub-compatible) webhook payload into a
- * {@link ForgeEvent}. Returns `null` for event names crab'd does not handle.
+ * {@link ForgeEvent}. Returns `null` for events crab'd does not handle.
+ *
+ * Forgejo reports `workflow_call` rather than the caller's trigger inside a reusable workflow, so
+ * that name resolves via the payload instead: https://crabd.lou.gg/self-hosting/#reusable-workflows
  */
 export function parseGitHubEvent(eventName: string, payload: unknown, forge: 'github' | 'forgejo' = 'github'): ForgeEvent | null {
-  const kind = EVENT_KINDS[eventName];
+  const p = (payload ?? {}) as RawPayload;
+  const kind = EVENT_KINDS[eventName] ?? (eventName === 'workflow_call' ? inferKindFromPayload(p) : null);
   if (!kind) return null;
 
-  const p = payload as RawPayload;
   const repo = buildRepo(p.repository);
 
   const associationSource = p.comment?.author_association ?? p.issue?.author_association ?? p.pull_request?.author_association;
