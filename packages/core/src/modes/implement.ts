@@ -22,6 +22,9 @@ export const implementMode: ModeDefinition<ImplementOutput> = {
     "Implement a requested change end-to-end on a branch and open a pull request. Choose this when the user asks crab'd to build, add, fix, refactor, or otherwise change the code itself.",
   outputSchema: ImplementOutputSchema,
   tools: ['comment', 'commit', 'open_pr'],
+  // Committing and opening the pull request *is* this mode; there is no read-only version of it,
+  // so `prepareRun` gates it out entirely rather than letting it run and produce nothing.
+  writes: 'required',
   async finalize(ctx) {
     const branch = ctx.data.branch || `crabd/implement-${subjectNumber(ctx.context, ctx.event) ?? 'issue'}`;
     const committed = await commitWorkingChanges({
@@ -30,6 +33,7 @@ export const implementMode: ModeDefinition<ImplementOutput> = {
       branch,
       message: ctx.data.pr_title,
       baseBranch: ctx.context.repo.defaultBranch,
+      writesAllowed: ctx.config.permissions.write,
     });
 
     if (!committed) {

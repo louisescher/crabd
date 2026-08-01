@@ -13,13 +13,25 @@ export interface CommitOptions {
   branch: string;
   message: string;
   baseBranch?: string;
+  /**
+   * `config.permissions.write`. Optional only so custom modes written against the old signature
+   * still compile; pass it. An explicit `false` throws rather than committing.
+   */
+  writesAllowed?: boolean;
 }
 
 /**
  * Commit the working-tree changes the model made to `branch` via the forge API.
  * Returns `false` (committing nothing) when the working tree is clean.
+ *
+ * The last line of defense for `permissions.write`: modes are expected to check it themselves and
+ * say something useful, but every write funnels through here, so a mode that forgets fails loudly
+ * instead of pushing.
  */
 export async function commitWorkingChanges(options: CommitOptions): Promise<boolean> {
+  if (options.writesAllowed === false) {
+    throw new Error('crabd: refusing to commit: writes are disabled for this repository (permissions.write: false)');
+  }
   if (!hasChanges(options.cwd)) return false;
   const changes = collectChanges(options.cwd);
   if (changes.length === 0) return false;

@@ -23,6 +23,16 @@ export interface AuthProvider {
    * skip). Never write-scoped.
    */
   mintScopedToken?(options: { repositoryNames?: string[]; packagesRead?: boolean }): Promise<string>;
+  /**
+   * The permissions the token from {@link getToken} actually carries, as the forge reports them
+   * (`{ contents: 'write', issues: 'write', … }`). Used to notice *before* the run that crab'd
+   * cannot commit here, instead of discovering it in a 403 after the model has done the work.
+   *
+   * Returns `undefined` when the strategy cannot know (a supplied PAT or workflow token carries no
+   * introspectable scope), and callers must read that as "unknown", never as "no access".
+   * Optional: only strategies that mint their own tokens can answer.
+   */
+  tokenPermissions?(): Promise<Record<string, string> | undefined>;
 }
 
 /** A pre-issued token supplied directly (CI secret / PAT / fine-grained token). */

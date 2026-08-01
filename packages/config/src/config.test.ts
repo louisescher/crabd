@@ -417,6 +417,49 @@ describe('resolveConfig — repos & sandbox', () => {
   });
 });
 
+describe('resolveConfig: permissions.write', () => {
+  it('defaults to true, because implement is enabled by default', () => {
+    expect(resolveConfig({ layers: {} }).permissions.write).toBe(true);
+  });
+
+  it('turns writes off when implement is disabled, which is the whole point of disabling it', () => {
+    const r = resolveConfig({ layers: { org: { modes: { implement: { enabled: false } } } } });
+    expect(r.permissions.write).toBe(false);
+  });
+
+  it('honors an explicit true even with implement off (disable the PR flow, keep committing)', () => {
+    const r = resolveConfig({
+      layers: { org: { modes: { implement: { enabled: false } }, permissions: { write: true } } },
+    });
+    expect(r.permissions.write).toBe(true);
+  });
+
+  it('honors an explicit false even with implement on', () => {
+    const r = resolveConfig({ layers: { repo: { permissions: { write: false } } } });
+    expect(r.permissions.write).toBe(false);
+  });
+
+  it('is lockable, so a repo cannot grant itself writes the org withheld', () => {
+    const r = resolveConfig({
+      layers: {
+        org: { permissions: { write: false }, governance: { locked: ['permissions.write'] } },
+        repo: { permissions: { write: true } },
+      },
+    });
+    expect(r.permissions.write).toBe(false);
+  });
+
+  it('derives from the resolved implement.enabled, not the highest layer that mentions it', () => {
+    const r = resolveConfig({
+      layers: {
+        org: { modes: { implement: { enabled: false } } },
+        repo: { modes: { implement: { enabled: true } } },
+      },
+    });
+    expect(r.permissions.write).toBe(true);
+  });
+});
+
 describe('resolveConfig — governance / locked keys', () => {
   const org: CrabdConfigPartial = {
     providers: { allowlist: ['anthropic'] },

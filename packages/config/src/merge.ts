@@ -67,7 +67,11 @@ export interface ResolvedConfig {
   triggerPhrase: string;
   thinkingLevel: ThinkingLevel;
   providers: { allowlist: string[]; gatewayUrl: string | null; custom: ResolvedCustomProvider[] };
-  permissions: { allowedAssociations: string[] };
+  permissions: {
+    allowedAssociations: string[];
+    /** Whether crab'd may commit or open pull requests. See `permissions.write`. */
+    write: boolean;
+  };
   /** How crab'd presents itself in tracking comments. */
   appearance: { name: string; emoji: string; footer: boolean };
   review: {
@@ -288,6 +292,15 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
     'permissions.allowed_associations',
   );
 
+  const modes = resolveModes(layers, locked);
+  // Derived unless a layer says otherwise: `implement` is the only mode that exists to change the
+  // repo, so switching it off reads as "crab'd does not write here", and `mention`, which can
+  // also commit, has to honor that. Without this, disabling implement leaves a second, less obvious
+  // write path wide open.
+  const write =
+    pickScalar('permissions.write', (c) => c.permissions?.write, layers, locked) ??
+    modes.implement?.enabled !== false;
+
   // Appearance: name falls back to the default if blank (avoids a degenerate `****`);
   // emoji keeps '' as an explicit "no emoji" choice, so only `?? default` for the unset case.
   const appearanceName = (pickScalar('appearance.name', (c) => c.appearance?.name, layers, locked) ?? "crab'd").trim() || "crab'd";
@@ -359,7 +372,7 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
     triggerPhrase,
     thinkingLevel,
     providers: { allowlist, gatewayUrl, custom },
-    permissions: { allowedAssociations },
+    permissions: { allowedAssociations, write },
     appearance: { name: appearanceName, emoji: appearanceEmoji, footer: appearanceFooter },
     review: {
       commentOnly,
@@ -381,7 +394,7 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
     },
     limits: { maxTurns, ...(timeoutMinutes !== undefined ? { timeoutMinutes } : {}) },
     rateLimit,
-    modes: resolveModes(layers, locked),
+    modes,
     mcp,
   };
 }

@@ -10,6 +10,9 @@ import { authorizeActor } from '../policy/trust.ts';
 import { renderWorking, type Branding } from '../report/tracking.ts';
 import { detectTrigger, type TriggerResult } from '../trigger/detect.ts';
 
+/** Forge tools that change the repository, dropped from a mode's toolset when writes are off. */
+const WRITE_TOOLS = new Set(['commit', 'open_pr']);
+
 /** Everything the Flue phase needs to run one agent turn. */
 export interface RunPlan {
   mode: string;
@@ -92,10 +95,17 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
   const { adapter, config, event, cwd } = input;
 
   // Known modes are all registered ones (built-ins + custom from crabd.config.ts);
-  // enabled modes are those minus any explicitly disabled in config. Passing both lets a
-  // custom mode's name work as a trigger keyword while a disabled mode is gated out.
+  // enabled modes are those minus any explicitly disabled in config, and, when writes are off,
+  // minus the modes that exist only to write. Passing both lets a custom mode's name work as a
+  // trigger keyword while a disabled mode is gated out.
   const knownModes = new Set(listModes());
-  const enabledModes = new Set([...knownModes].filter((name) => config.modes[name]?.enabled !== false));
+  const enabledModes = new Set(
+    [...knownModes].filter((name) => {
+      if (config.modes[name]?.enabled === false) return false;
+      if (!config.permissions.write && getMode(name)?.writes === 'required') return false;
+      return true;
+    }),
+  );
 
   const trigger = detectTrigger(event, { triggerPhrase: config.triggerPhrase, enabledModes, knownModes });
   if (!trigger) return { status: 'skip', reason: 'no trigger matched this event' };
@@ -166,7 +176,9 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
   const modeCfg = config.modes[resolvedTrigger.mode];
   const model = modeCfg?.model ?? config.model;
   const thinkingLevel = modeCfg?.thinkingLevel ?? config.thinkingLevel;
-  const toolNames = modeCfg?.tools ?? modeDef.tools;
+  const toolNames = (modeCfg?.tools ?? modeDef.tools).filter(
+    (tool) => config.permissions.write || !WRITE_TOOLS.has(tool),
+  );
 
   // Make sure the checkout is the code under review before anything reads from it.
   //

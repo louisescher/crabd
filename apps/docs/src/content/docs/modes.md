@@ -11,13 +11,17 @@ comment can always steer the run.
 
 **Triggered by** a comment containing your trigger phrase (default `/crabd`).
 
-crab'd answers the request. If it edits files in the checked-out repo, it commits them to a branch
-and notes the branch in its reply.
+crab'd answers the request. When the comment **asks for a change**, it makes the change, commits it
+to a branch, and notes the branch in its reply.
 
 ```text
-/crabd why is the retry logic firing twice here?
-/crabd add a unit test for the empty-input case
+/crabd why is the retry logic firing twice here?   # answered, nothing committed
+/crabd add a unit test for the empty-input case    # implemented and committed
 ```
+
+A mention that asks for nothing never produces a commit. A bare `/crabd`, or a question, gets an
+answer: crab'd will not decide on its own that a fix it noticed is worth pushing to your branch. If
+it edited files anyway, it says so and leaves them uncommitted. To get the change, ask for it.
 
 ## review
 
@@ -94,3 +98,18 @@ modes:
 ```
 
 A disabled mode never triggers, even if its keyword appears in a mention.
+
+Disabling `implement` also turns writes off everywhere, `mention` included: it is the only mode
+whose whole purpose is changing the repo, so switching it off is read as "crab'd does not write
+here" rather than "close one of the two ways it writes". If you want mention commits without the
+pull-request flow, say so:
+
+```yaml title=".crabd.yml"
+modes:
+  implement:
+    enabled: false
+permissions:
+  write: true # keep mention's commits
+```
+
+See [`permissions.write`](/reference/config-yaml/#permissions) for read-only runs in general.

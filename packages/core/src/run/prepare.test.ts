@@ -212,3 +212,68 @@ describe('prepareRun mention classification', () => {
     if (outcome.status === 'run') expect(outcome.plan.mode).toBe('mention');
   });
 });
+
+describe('prepareRun with writes disabled', () => {
+  const readOnly = () =>
+    resolveConfig({
+      layers: {
+        repo: {
+          model: 'openai/gpt-5',
+          providers: { allowlist: ['openai'] },
+          permissions: { allowed_associations: ['MEMBER'], write: false },
+        },
+      },
+    });
+
+  it('drops the write-only implement mode from the classifier candidates', async () => {
+    const adapter = fakeAdapter();
+    const classify = vi.fn(async (_req: ClassifyRequest) => ({ mode: 'review' }));
+    await prepareRun({
+      adapter,
+      config: readOnly(),
+      event: commentEvent('/crabd have another look'),
+      cwd: '/nonexistent',
+      classify,
+    });
+    expect(classify.mock.calls[0]![0].candidates.map((c) => c.name).sort()).toEqual(['mention', 'review']);
+  });
+
+  it('refuses to route to implement even when named explicitly', async () => {
+    const adapter = fakeAdapter();
+    const outcome = await prepareRun({
+      adapter,
+      config: readOnly(),
+      event: commentEvent('/crabd implement the retry logic'),
+      cwd: '/nonexistent',
+    });
+    expect(outcome.status).toBe('skip');
+  });
+
+  it('strips the write tools from a mode that can still run read-only', async () => {
+    const adapter = fakeAdapter();
+    const outcome = await prepareRun({
+      adapter,
+      config: readOnly(),
+      event: commentEvent('/crabd what does this do?'),
+      cwd: '/nonexistent',
+    });
+    if (outcome.status === 'run') {
+      expect(outcome.plan.mode).toBe('mention');
+      expect(outcome.plan.toolNames).toEqual(['comment']); // 'commit' dropped
+    }
+  });
+
+  it('leaves a read-only mode untouched', async () => {
+    const adapter = fakeAdapter();
+    const outcome = await prepareRun({
+      adapter,
+      config: readOnly(),
+      event: prEvent('github', 'MEMBER'),
+      cwd: '/nonexistent',
+    });
+    if (outcome.status === 'run') {
+      expect(outcome.plan.mode).toBe('review');
+      expect(outcome.plan.toolNames).toEqual(['comment', 'review']);
+    }
+  });
+});

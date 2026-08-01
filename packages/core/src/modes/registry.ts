@@ -72,6 +72,13 @@ export interface ModeDefinition<T = unknown> {
   /** Forge tool names this mode may use (documented; enforced by config allowlist). */
   tools: string[];
   /**
+   * Whether this mode's `finalize` writes to the repository, and whether it can do anything
+   * useful without that. `'required'` modes are gated out entirely when `permissions.write` is
+   * off (a mode that only exists to open a pull request has no read-only form); `'optional'`
+   * modes still run and simply skip the write. Omit for modes that never write.
+   */
+  writes?: 'required' | 'optional';
+  /**
    * Optional semantic check on the structured output, run before {@link finalize}. Returning
    * `{ ok: false, repairPrompt }` asks the model to correct itself on the same session (bounded by
    * the caller). Omit when a mode has nothing to check beyond its schema.

@@ -55,3 +55,22 @@ export default defineCrabdConfig({
 - `ctx.config`, `ctx.event`, `ctx.trigger`, `ctx.cwd`.
 
 Return a `summary` (rendered into the tracking comment) and optionally a `prUrl`.
+
+## Modes that write
+
+If your `finalize` commits or opens a pull request, declare it:
+
+```ts
+{
+  name: 'backport',
+  tools: ['comment', 'commit'],
+  writes: 'required', // or 'optional'
+  // …
+}
+```
+
+`'required'` means the mode has no useful read-only form, so it is gated out entirely when
+[writes are off](/reference/config-yaml/#read-only-runs). `'optional'` means it still runs and skips
+the write: check `ctx.config.permissions.write` in `finalize` and say what you did instead. Pass
+that same flag to `commitWorkingChanges({ …, writesAllowed: ctx.config.permissions.write })`, which
+throws rather than committing when writes are disabled.

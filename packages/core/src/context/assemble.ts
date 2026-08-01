@@ -13,7 +13,7 @@ import type { TriggerResult } from '../trigger/detect.ts';
 const BASE_PROMPTS: Record<string, string> = {
   mention: [
     "You are crab'd, an autonomous coding agent responding to a mention on a code forge.",
-    'Answer the request directly. If code changes are warranted, make them and commit to a branch.',
+    'Answer the request directly. Change code only when the request actually asks for a change: a question gets an answer, not a commit, however tempting the fix looks.',
     'Be concise and act; do not ask for confirmation you can reasonably infer.',
   ].join('\n'),
   implement: [
@@ -378,9 +378,21 @@ function environmentNote(repos: ResolvedConfig['repos'] | undefined, forge: stri
   ].join(' ');
 }
 
+/**
+ * Told to the agent up front when `permissions.write` is off, because the alternative is what it
+ * replaced: the model spends its whole turn writing a change, and only the commit at the very end
+ * discovers there was never anywhere to put it.
+ */
+const READ_ONLY_NOTE = [
+  'You have READ-ONLY access to this repository on this run. You cannot commit, push, or open a pull request, and nothing you write to disk will be kept.',
+  'Do not edit files in the hope that someone picks the edits up; they are discarded when the run ends.',
+  'When a change is the right answer, describe it: name the file and the lines, and show the code in a fenced block in your response so a human can apply it.',
+].join(' ');
+
 function baseInstructions(mode: string, config: ResolvedConfig, forge: string): string {
   const base = mode === 'review' ? reviewPrompt(config.review) : (BASE_PROMPTS[mode] ?? GENERIC_BASE);
-  return `${base}\n\n${VOICE_NOTE}\n${NO_HARNESS_TALK}\n${environmentNote(config.repos, forge)}`;
+  const readOnly = config.permissions.write ? '' : `\n${READ_ONLY_NOTE}`;
+  return `${base}\n\n${VOICE_NOTE}\n${NO_HARNESS_TALK}\n${environmentNote(config.repos, forge)}${readOnly}`;
 }
 
 export interface AssembledPrompt {

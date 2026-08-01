@@ -107,6 +107,26 @@ reached the step. Note the **forge-token fallback** (omitting `token_env` for sa
 needs your own GitHub App with `packages: read` — it does not work under the hosted broker; use an
 explicit `token_env` there.
 
+## crab'd won't commit
+
+> the reply ends with `I did not commit anything…`, or a commit fails with
+> `Resource not accessible by integration`
+
+Three reasons, in order of likelihood:
+
+- **The mention didn't ask for a change.** `mention` mode commits only when the comment asks for
+  one. A bare `/crabd`, or a question, gets an answer even if crab'd noticed a fix worth making.
+  Ask for the change explicitly.
+- **Writes are off.** Either `permissions.write: false`, or `modes.implement.enabled: false`, which
+  turns writes off everywhere unless you set `permissions.write: true`. See
+  [`permissions`](/reference/config-yaml/#permissions).
+- **The token can't write.** Your GitHub App installation grants `contents: read`. crab'd now
+  detects this at startup, warns, and runs read-only instead of failing at the commit, and the run log
+  carries the warning. Grant the App **Contents: Read and write**, then accept the permission
+  request on the installation (an org owner has to approve it; raising the App's permissions alone
+  does nothing until the installation accepts). Older versions surfaced this only as a 403 from
+  `POST /repos/…/git/blobs` at the very end of a run.
+
 ## Unexpected error
 
 > **crab'd** hit an error …

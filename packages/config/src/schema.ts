@@ -68,6 +68,15 @@ export type ProvidersPartial = v.InferOutput<typeof ProvidersPartialSchema>;
 export const PermissionsPartialSchema = v.object({
   /** Forge author-associations / roles allowed to trigger crab'd (e.g. OWNER, MEMBER, COLLABORATOR). */
   allowed_associations: v.optional(v.array(v.string())),
+  /**
+   * Whether crab'd may change the repository at all (commit to a branch, open a pull request).
+   * When `false` it can still read, answer, and review, but every write path is closed.
+   *
+   * Left unset it is **derived**: turning off the write-only `implement` mode is a statement that
+   * crab'd should not be changing this repo, so `mention` stops committing too. Set it explicitly
+   * to keep one without the other. Worth locking via `governance.locked` in an org config.
+   */
+  write: v.optional(v.boolean()),
 });
 export type PermissionsPartial = v.InferOutput<typeof PermissionsPartialSchema>;
 

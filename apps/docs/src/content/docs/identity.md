@@ -66,6 +66,12 @@ pass its credentials:
 The installation ID is **auto-resolved** from the repo. Because App credentials take priority, this
 also lets a specific repo run a differently-branded App than the org default.
 
+Grant the App **Contents: Read and write**, **Issues: Read and write**, **Pull requests: Read and
+write**, and **Metadata: Read**. Contents write is what commits need; with only `contents: read`
+crab'd runs [read-only](/reference/config-yaml/#read-only-runs) and says so in the log rather than
+failing at the commit. Raising an App's permissions does not apply retroactively; every existing
+installation has to accept the new request before the extra access takes effect.
+
 ## 3. Workflow token (github-actions)
 
 No App, no broker, just the workflow's `GITHUB_TOKEN`. Simplest, but comments come from the

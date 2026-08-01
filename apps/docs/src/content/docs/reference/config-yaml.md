@@ -16,7 +16,7 @@ default. For how these values combine across the org repo, the repo file, CI inp
 | `trigger_phrase` | `string` | `/crabd` | The mention phrase that triggers crab'd. |
 | `thinking_level` | `'off' \| 'minimal' \| 'low' \| 'medium' \| 'high' \| 'xhigh'` | `medium` | Reasoning effort. |
 | `providers` | `object` | — | Provider allowlist, gateway, and custom providers. See below. |
-| `permissions` | `object` | — | Who may trigger crab'd. See below. |
+| `permissions` | `object` | — | Who may trigger crab'd, and whether it may write. See below. |
 | `appearance` | `object` | — | Name, emoji, and footer crab'd uses in its comments. See below. |
 | `review` | `object` | — | Review-mode behavior. See below. |
 | `web_search` | `object` | — | Web research tools for the agent. See below. |
@@ -52,6 +52,40 @@ default. For how these values combine across the org repo, the repo file, CI inp
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `allowed_associations` | `string[]` | `[OWNER, MEMBER, COLLABORATOR]` | Author-associations allowed to trigger crab'd. Bots are always denied. |
+| `write` | `boolean` | derived | Whether crab'd may change the repository (commit to a branch, open a pull request). Unset, it follows `modes.implement.enabled`: turning implement off also stops `mention` from committing. Set it explicitly to keep one without the other. |
+
+### Read-only runs
+
+`permissions.write: false` closes every write path at once. crab'd still reads, answers, and
+reviews; `implement` stops triggering (committing and opening a PR is all it does), `mention`
+answers without committing, and the agent is told up front so it describes a change instead of
+writing one it cannot land.
+
+```yaml
+# Review and answer questions; never touch the code.
+permissions:
+  write: false
+```
+
+Two other things turn it on without you asking:
+
+- **Disabling `implement`.** Switching off the only mode that exists to change the repo reads as
+  "crab'd does not write here", so `mention` stops committing too. `permissions.write: true`
+  overrides this if you want the mention commits without the PR flow.
+- **A token that cannot write.** At startup crab'd asks its token what it was granted. If the
+  GitHub App installation only has `contents: read`, the run goes read-only and logs a warning,
+  rather than spending the whole turn on a change and failing on a 403 at the commit. Tokens whose
+  scope cannot be introspected (a PAT, the workflow `GITHUB_TOKEN`) are treated as unknown, not as
+  read-only.
+
+Lock it at the org level so a repo cannot grant itself writes back:
+
+```yaml title="org .crabd.yml"
+permissions:
+  write: false
+governance:
+  locked: [permissions.write]
+```
 
 ## `appearance`
 

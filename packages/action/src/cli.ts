@@ -247,6 +247,25 @@ async function main(): Promise<number> {
   const { config, extensionPath } = await loadResolvedConfig({ adapter, event, cwd });
   await registerExtensionModes(extensionPath, cwd);
 
+  // A token that cannot write makes every write path a 403 at the end of the run, after the model
+  // has already done the work. Ask the token what it can do and turn writes off up front, so the
+  // agent is told before it starts and answers instead of committing.
+  if (config.permissions.write) {
+    try {
+      const granted = await auth.tokenPermissions?.();
+      if (granted && granted.contents !== 'write') {
+        warn(
+          `the ${forge === 'github' ? 'GitHub App installation' : 'token'} for this repository grants \`contents: ${granted.contents ?? 'none'}\`, so crab'd cannot commit here and is running read-only. Grant contents write access (and accept the permission request on the installation) to let it commit.`,
+        );
+        config.permissions.write = false;
+      }
+    } catch (error) {
+      // Unknowable scope is not a reason to refuse to run: keep the configured posture and let a
+      // genuine write failure surface as it did before.
+      log(`could not read token permissions, keeping configured write access: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   // Multi-repo read needs a cross-repo-capable token. The broker vends single-repo tokens by
   // design, so ignore repos.read under it — keeping the prompt honest (no false GH_TOKEN claim).
   if (strategy === 'broker' && config.repos.read !== undefined) {

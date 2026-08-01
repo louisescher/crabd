@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +15,7 @@ import type {
 import { registerBuiltinModes } from './builtins.ts';
 import { getMode, listModes } from './registry.ts';
 import { applyFindingGates, reviewMode, type ReviewFinding } from './review.ts';
+import { commitWorkingChanges } from './shared.ts';
 import { DEFAULT_BRANDING, renderResult, renderWorking } from '../report/tracking.ts';
 
 registerBuiltinModes();
@@ -422,6 +424,101 @@ describe('applyFindingGates', () => {
     ]);
     expect(kept).toHaveLength(1);
     expect(dropped.unevidenced).toBe(0);
+  });
+});
+
+/**
+ * These cover the failure that motivated the gate: a bare `@crabd` on someone's pull request came
+ * back as a commit pushed to their branch. `made_changes` is true throughout (the model did edit
+ * files), so each test is about what finalize does with them.
+ */
+describe('mention mode finalize', () => {
+  const data = { response: 'Here is what I found.', made_changes: true, branch: 'their-pr-branch' };
+
+  // A real checkout with an uncommitted edit: the commit path reads `git status`, and a gate that
+  // only passes because the tree looked clean would prove nothing.
+  let dirty: string;
+  beforeAll(() => {
+    dirty = mkdtempSync(join(tmpdir(), 'crabd-mention-'));
+    execFileSync('git', ['init', '-q'], { cwd: dirty });
+    writeFileSync(join(dirty, 'edited.ts'), 'export const a = 1;\n');
+  });
+  afterAll(() => rmSync(dirty, { recursive: true, force: true }));
+
+  const run = (over: { instruction?: string; write?: boolean } = {}) => {
+    const adapter = fakeAdapter();
+    const mode = getMode('mention')!;
+    return mode
+      .finalize({
+        adapter,
+        config: resolveConfig({
+          layers: { repo: over.write === undefined ? {} : { permissions: { write: over.write } } },
+        }),
+        event: baseEvent,
+        context: baseContext,
+        trigger: {
+          mode: 'mention',
+          explicit: false,
+          ...(over.instruction ? { userInstruction: over.instruction } : {}),
+        },
+        cwd: dirty,
+        data,
+      })
+      .then((result) => ({ result, adapter }));
+  };
+
+  it('does not commit for a bare mention that asked for nothing', async () => {
+    const { result, adapter } = await run();
+    expect(adapter.commitToBranch).not.toHaveBeenCalled();
+    expect(result.summary).toContain('Here is what I found.');
+    expect(result.summary).toMatch(/did not commit anything/);
+    expect(result.summary).not.toContain('their-pr-branch');
+  });
+
+  it('commits when the mention actually asked for a change', async () => {
+    const { result, adapter } = await run({ instruction: 'fix the null check in parse()' });
+    expect(adapter.commitToBranch).toHaveBeenCalledTimes(1);
+    expect(result.summary).toContain('Committed changes to `their-pr-branch`');
+  });
+
+  it('does not commit when writes are off, however explicit the request', async () => {
+    const { result, adapter } = await run({ instruction: 'fix the null check', write: false });
+    expect(adapter.commitToBranch).not.toHaveBeenCalled();
+    expect(result.summary).toMatch(/writes are turned off/);
+  });
+
+  it('still answers when it declines to commit', async () => {
+    const { result } = await run({ write: false });
+    expect(result.summary.startsWith('Here is what I found.')).toBe(true);
+  });
+
+  it('leaves an answer with no edits alone', async () => {
+    const adapter = fakeAdapter();
+    const result = await getMode('mention')!.finalize({
+      adapter,
+      config: resolveConfig({ layers: {} }),
+      event: baseEvent,
+      context: baseContext,
+      trigger: { mode: 'mention', explicit: false },
+      cwd: '/tmp',
+      data: { response: 'It parses the header.', made_changes: false },
+    });
+    expect(adapter.commitToBranch).not.toHaveBeenCalled();
+    expect(result.summary).toBe('It parses the header.');
+  });
+});
+
+describe('commitWorkingChanges write gate', () => {
+  it('throws rather than committing when writes are disabled', async () => {
+    await expect(
+      commitWorkingChanges({
+        adapter: fakeAdapter(),
+        cwd: '/tmp',
+        branch: 'any',
+        message: 'any',
+        writesAllowed: false,
+      }),
+    ).rejects.toThrow(/writes are disabled/);
   });
 });
 

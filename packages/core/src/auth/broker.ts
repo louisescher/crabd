@@ -31,7 +31,7 @@ export class BrokerAuth implements AuthProvider {
   readonly kind = 'github' as const;
   private readonly env: NodeJS.ProcessEnv;
   private readonly audience: string;
-  private cached?: { token: string; expiresAt: number };
+  private cached?: { token: string; expiresAt: number; permissions?: Record<string, string> };
 
   constructor(private readonly options: BrokerAuthOptions) {
     this.env = options.env ?? process.env;
@@ -68,13 +68,27 @@ export class BrokerAuth implements AuthProvider {
     if (!res.ok) {
       throw new Error(`crabd: broker rejected the request (${res.status}): ${(await res.text()).slice(0, 300)}`);
     }
-    const data = (await res.json()) as { token?: string; expiresAt?: string };
+    const data = (await res.json()) as {
+      token?: string;
+      expiresAt?: string;
+      permissions?: Record<string, string>;
+    };
     if (!data.token) throw new Error('crabd: broker response had no token');
 
     this.cached = {
       token: data.token,
       expiresAt: data.expiresAt ? new Date(data.expiresAt).getTime() : now + 5 * 60_000,
+      ...(data.permissions ? { permissions: data.permissions } : {}),
     };
     return data.token;
+  }
+
+  /**
+   * Permissions the broker reports for the minted token. Older brokers don't send them, which
+   * reads as unknown rather than as none.
+   */
+  async tokenPermissions(): Promise<Record<string, string> | undefined> {
+    await this.getToken();
+    return this.cached?.permissions;
   }
 }

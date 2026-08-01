@@ -37,7 +37,7 @@ export class GitHubAppAuth implements AuthProvider {
   private readonly auth: ReturnType<typeof createAppAuth>;
   private readonly privateKey: string;
   private installationId?: number;
-  private cached?: { token: string; expiresAt: number };
+  private cached?: { token: string; expiresAt: number; permissions?: Record<string, string> };
 
   constructor(private readonly options: GitHubAppAuthOptions) {
     if (options.installationId != null && options.installationId !== '') {
@@ -72,8 +72,20 @@ export class GitHubAppAuth implements AuthProvider {
 
     const installationId = await this.resolveInstallationId();
     const result = await this.auth({ type: 'installation', installationId });
-    this.cached = { token: result.token, expiresAt: new Date(result.expiresAt).getTime() };
+    this.cached = {
+      token: result.token,
+      expiresAt: new Date(result.expiresAt).getTime(),
+      // GitHub returns the permissions the installation actually granted, which is not the same
+      // as the ones the App asks for in its manifest: an org can install it with less.
+      ...(result.permissions ? { permissions: result.permissions as Record<string, string> } : {}),
+    };
     return result.token;
+  }
+
+  /** The installation's granted permissions, from the token mint. */
+  async tokenPermissions(): Promise<Record<string, string> | undefined> {
+    await this.getToken();
+    return this.cached?.permissions;
   }
 
   /**

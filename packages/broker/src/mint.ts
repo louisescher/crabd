@@ -11,6 +11,8 @@ export interface MintOptions {
 export interface MintedToken {
   token: string;
   expiresAt: string;
+  /** Permissions the installation actually granted, so the action can tell what it may do. */
+  permissions?: Record<string, string>;
 }
 
 /**
@@ -39,5 +41,9 @@ export async function mintInstallationToken(options: MintOptions): Promise<Minte
     permissions: { contents: 'write', issues: 'write', pull_requests: 'write', metadata: 'read' },
   });
 
-  return { token: result.token, expiresAt: result.expiresAt };
+  return {
+    token: result.token,
+    expiresAt: result.expiresAt,
+    ...(result.permissions ? { permissions: result.permissions as Record<string, string> } : {}),
+  };
 }
