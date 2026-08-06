@@ -192,4 +192,13 @@ export interface ForgeAdapter {
    * Returns `undefined` when the file or repo is absent/unreadable.
    */
   readOrgConfig(repoSlug: string, path: string): Promise<string | undefined>;
+
+  /**
+   * Check whether the credential crab'd is running as can reach `repoSlug` (`owner/repo`),
+   * without minting or scoping any token. Used to preflight an explicit `repos.read` list before
+   * the run starts: `'denied'` on 401/403/404 (no access, or the repo doesn't exist to this
+   * credential — both mean the same thing to the caller); other failures (network, 5xx) throw, so
+   * the caller can tell "confirmed no access" apart from "couldn't tell".
+   */
+  checkRepoAccess(repoSlug: string): Promise<'ok' | 'denied'>;
 }

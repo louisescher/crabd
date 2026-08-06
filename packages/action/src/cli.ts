@@ -292,6 +292,7 @@ async function main(): Promise<number> {
 
   const { plan, context, trigger } = outcome;
   log(`mode=${plan.mode} model=${plan.model} subject=#${plan.subject}`);
+  const runUrl = runUrlFromEnv();
 
   // A checkout that isn't the PR head means the agent reads the wrong version of every file it
   // opens. prepareRun already tried to correct it and told the model; make it loud in CI too,
@@ -368,7 +369,37 @@ async function main(): Promise<number> {
     else log(`sandbox.env: "${name}" is not set in the environment — skipping`);
   }
 
-  // (b) Cross-repo READ (or a GitHub Packages .npmrc with no explicit token): expose a
+  // (b) An explicit repos.read list is a promise baked into the agent's prompt ("you have
+  //     GH_TOKEN read access to these repos" — see environmentNote in assemble.ts). If the
+  //     credential crab'd is actually running as can't reach one of them, that isn't something
+  //     to continue past silently: fail the run now, naming the repo, instead of leaving the
+  //     agent to discover a missing/useless token mid-run. Skipped for `'all'` or a glob entry —
+  //     neither is enumerable.
+  if (Array.isArray(config.repos.read) && !config.repos.read.some((r) => r.includes('*'))) {
+    const denied: string[] = [];
+    for (const slug of config.repos.read) {
+      try {
+        if ((await adapter.checkRepoAccess(slug)) === 'denied') denied.push(slug);
+      } catch (error) {
+        log(`repos.read: could not verify access to "${slug}", continuing: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (denied.length > 0) {
+      const plural = denied.length > 1;
+      const who = forge === 'github' ? 'the GitHub App installation' : "crab'd's Forgejo bot account";
+      const fix = forge === 'github' ? 'add the repo(s) to the App installation' : 'add the bot account as a member/collaborator there';
+      log(`repos.read: no access to ${denied.join(', ')} — failing the run`);
+      await reportRunError(adapter, plan, {
+        kind: 'config',
+        detail: `\`repos.read\` lists ${denied.map((d) => `\`${d}\``).join(', ')}, but ${who} cannot access ${plural ? 'them' : 'it'}. Either ${fix}, or remove ${plural ? 'them' : 'it'} from \`repos.read\`.`,
+        ...(config.triggerPhrase ? { triggerPhrase: config.triggerPhrase } : {}),
+        ...(runUrl ? { runUrl } : {}),
+      });
+      return 1;
+    }
+  }
+
+  // (c) Cross-repo READ (or a GitHub Packages .npmrc with no explicit token): expose a
   //     read-only forge token so the model can `gh`/`git` other repos on demand.
   const npmrcNeedsForgeToken = config.sandbox.npmrc.some((r) => !r.tokenEnv);
   if (config.repos.read !== undefined || npmrcNeedsForgeToken) {
@@ -395,7 +426,7 @@ async function main(): Promise<number> {
     }
   }
 
-  // (c) Private registries: forward any explicit token env-vars, write a managed .npmrc, point
+  // (d) Private registries: forward any explicit token env-vars, write a managed .npmrc, point
   //     npm/pnpm at it via NPM_CONFIG_USERCONFIG (never clobbering the repo's own .npmrc), and tell
   //     the agent which registries are usable so it doesn't burn its budget on installs that 401/403.
   if (config.sandbox.npmrc.length > 0) {
@@ -430,8 +461,6 @@ async function main(): Promise<number> {
   }
 
   const images = extractImageUrls(event.comment?.body, context.issue?.body, context.pullRequest?.body);
-
-  const runUrl = runUrlFromEnv();
 
   // Anchorable lines travel as compact ranges rather than a second copy of the diff: the turn
   // input is passed as a command-line argument, and the message already carries the diff plus the
