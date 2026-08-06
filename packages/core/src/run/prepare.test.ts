@@ -38,6 +38,7 @@ function fakeAdapter(overrides: Partial<ForgeAdapter> = {}): ForgeAdapter {
     commitToBranch: vi.fn(async () => {}),
     openOrUpdatePR: vi.fn(async (): Promise<PullRequestRef> => ({ number: 8, url: 'http://pr/8' })),
     readOrgConfig: vi.fn(async () => undefined),
+    checkRepoAccess: vi.fn(async () => 'ok' as const),
     ...overrides,
   };
 }

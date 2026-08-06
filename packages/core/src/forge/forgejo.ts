@@ -259,4 +259,13 @@ export class ForgejoForge implements ForgeAdapter {
     if (status !== 200 || !data?.content) return undefined;
     return Buffer.from(data.content, data.encoding === 'base64' ? 'base64' : 'utf-8').toString('utf-8');
   }
+
+  async checkRepoAccess(repoSlug: string): Promise<'ok' | 'denied'> {
+    const [owner, repo] = repoSlug.split('/');
+    if (!owner || !repo) return 'denied';
+    const res = await fetch(`${this.baseUrl}/repos/${owner}/${repo}`, { headers: await this.headers() });
+    if (res.ok) return 'ok';
+    if (res.status === 401 || res.status === 403 || res.status === 404) return 'denied';
+    throw new Error(`crabd forgejo: GET /repos/${owner}/${repo} → ${res.status}`);
+  }
 }

@@ -279,4 +279,18 @@ export class GitHubForge implements ForgeAdapter {
       return undefined;
     }
   }
+
+  async checkRepoAccess(repoSlug: string): Promise<'ok' | 'denied'> {
+    const [owner, repo] = repoSlug.split('/');
+    if (!owner || !repo) return 'denied';
+    const gh = await this.gh();
+    try {
+      await gh.repos.get({ owner, repo });
+      return 'ok';
+    } catch (error) {
+      const status = (error as { status?: number }).status;
+      if (status === 401 || status === 403 || status === 404) return 'denied';
+      throw error;
+    }
+  }
 }

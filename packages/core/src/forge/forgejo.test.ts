@@ -137,4 +137,20 @@ describe('ForgejoForge request shaping', () => {
     mockFetch(() => ({ status: 404, body: '' }));
     expect(await forge().readOrgConfig('acme/.crabd-config', '.crabd.yml')).toBeUndefined();
   });
+
+  it('reports "ok" for a repo the token can reach', async () => {
+    const calls = mockFetch(() => ({ status: 200, body: JSON.stringify({ id: 1 }) }));
+    expect(await forge().checkRepoAccess('other-org/widgets')).toBe('ok');
+    expect(calls[0]?.url).toBe('https://forge.example.com/api/v1/repos/other-org/widgets');
+  });
+
+  it.each([401, 403, 404])('reports "denied" for a %d response', async (status) => {
+    mockFetch(() => ({ status, body: '' }));
+    expect(await forge().checkRepoAccess('other-org/widgets')).toBe('denied');
+  });
+
+  it('throws on an unexpected status instead of treating it as denied', async () => {
+    mockFetch(() => ({ status: 500, body: 'boom' }));
+    await expect(forge().checkRepoAccess('other-org/widgets')).rejects.toThrow(/500/);
+  });
 });
