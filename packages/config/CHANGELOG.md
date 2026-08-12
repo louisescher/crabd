@@ -1,5 +1,19 @@
 # @crabd/config
 
+## 0.9.0
+
+### Minor Changes
+
+- d003ec0: Add `context_window` and `max_tokens` to `providers.custom`, so self-hosted models the built-in catalog does not know get a real context window.
+
+  Without them a custom-provider model resolved with no metadata, and an unknown window is treated as zero. That capped every request at a single output token: the model emitted one reasoning token, never called a tool, and the turn failed after the framework's follow-up ceiling with nothing in the logs pointing at the cause. It also made context compaction fire on every turn. crab'd now warns at startup when a model runs on a custom provider with no `context_window`.
+
+### Patch Changes
+
+- d003ec0: Upgrade dependencies: js-yaml 5, jose 6, `@octokit/rest` 22, `@octokit/auth-app` 8, `@hono/node-server` 2, `@types/node` 26, TypeScript 7 (packages only), plus hono, vitest, tsdown, astro and starlight minors.
+
+  js-yaml 5 drops its default export and now throws on a document with no content instead of returning nothing. `parseConfigYaml` keeps its documented contract: a `.crabd.yml` that is blank or all comments still resolves to an empty partial rather than failing the run.
+
 ## 0.8.0
 
 ## 0.7.0
