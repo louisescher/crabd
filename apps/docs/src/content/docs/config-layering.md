@@ -25,7 +25,7 @@ Higher layers win, but *how* they win depends on the value.
 | **Scalars** | Highest layer that sets it wins. | `model`, `trigger_phrase`, `thinking_level`, `limits.*` |
 | **Instructions** | **Accumulate**: concatenated across every layer, in order. | `prompt.instructions`, `modes.*.instructions` |
 | **Value lists** | **Replaced** by the highest layer that sets them. | `providers.allowlist`, `modes.*.tools` |
-| **Keyed lists** | **Reconciled by key**: a higher layer overrides a same-key entry and adds new ones. | `providers.custom` (by `id`), `mcp` (by `name`) |
+| **Keyed lists** | **Reconciled by key**: a higher layer merges into a same-key entry field by field, and adds new ones. | `providers.custom` (by `id`), `mcp` (by `name`) |
 
 ### Why the split matters
 

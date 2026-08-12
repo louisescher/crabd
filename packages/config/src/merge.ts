@@ -24,6 +24,8 @@ export interface ResolvedCustomProvider {
   apiKeyEnv?: string;
   contextWindow?: number;
   maxTokens?: number;
+  reasoning?: boolean;
+  vision?: boolean;
 }
 
 /** A resolved MCP server the agent can call tools from. */
@@ -231,8 +233,14 @@ function accumulateList(
  * layer keyed by `key`, so a higher layer **overrides** a same-key entry and adds
  * new ones, rather than replacing the whole list. Used for `mcp` (by name) and
  * `providers.custom` (by id) so repos can reuse org definitions and extend them.
+ *
+ * Same-key entries merge **field by field**, so a layer that supplies one field overrides only
+ * that field. This matters for values a run has to inject: a CI layer setting a provider's
+ * `base_url` keeps the org layer's `api_key_env` and `context_window` instead of silently
+ * dropping them, and an entry that lost its `context_window` this way capped every model
+ * response at a single token.
  */
-function reconcileByKey<T>(
+function reconcileByKey<T extends object>(
   path: string,
   get: (c: CrabdConfigPartial) => T[] | undefined,
   key: (item: T) => string,
@@ -241,7 +249,13 @@ function reconcileByKey<T>(
 ): T[] {
   const merged = new Map<string, T>();
   for (const layer of contributing(path, all, locked)) {
-    for (const item of get(layer.config) ?? []) merged.set(key(item), item);
+    for (const item of get(layer.config) ?? []) {
+      const id = key(item);
+      const lower = merged.get(id);
+      // An absent field must not overwrite a lower layer's value with `undefined`.
+      const defined = Object.fromEntries(Object.entries(item).filter(([, value]) => value !== undefined)) as T;
+      merged.set(id, lower ? { ...lower, ...defined } : item);
+    }
   }
   return [...merged.values()];
 }
@@ -282,14 +296,23 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
   );
   const gatewayUrl = pickScalar('providers.gateway_url', (c) => c.providers?.gateway_url, layers, locked) ?? null;
   const customRaw = reconcileByKey('providers.custom', (c) => c.providers?.custom, (p) => p.id, layers, locked);
-  const custom: ResolvedCustomProvider[] = customRaw.map((p) => ({
+  const custom: ResolvedCustomProvider[] = customRaw.map((p) => {
+    // Layers merge field by field, so `base_url` is optional per layer; the merged entry still needs
+    // one, and a custom provider with no endpoint would otherwise fail much later as a fetch error.
+    if (!p.base_url) {
+      throw new Error(`crabd config: providers.custom "${p.id}" has no base_url in any layer`);
+    }
+    return {
     id: p.id,
     baseUrl: p.base_url,
     ...(p.api ? { api: p.api } : {}),
     ...(p.api_key_env ? { apiKeyEnv: p.api_key_env } : {}),
     ...(p.context_window ? { contextWindow: p.context_window } : {}),
     ...(p.max_tokens ? { maxTokens: p.max_tokens } : {}),
-  }));
+    ...(p.reasoning !== undefined ? { reasoning: p.reasoning } : {}),
+    ...(p.vision !== undefined ? { vision: p.vision } : {}),
+    };
+  });
 
   const allowedAssociations = requireDefined(
     pickScalar('permissions.allowed_associations', (c) => c.permissions?.allowed_associations, layers, locked),

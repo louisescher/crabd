@@ -5,6 +5,8 @@ packages:
 allowBuilds:
   '@google/genai': true
   '@mongodb-js/zstd': true
+  # Transitive via @flue/cli -> @flue/vite -> agents; its only script prints a funding notice.
+  core-js-pure: false
   esbuild: true
   node-liblzma: true
   protobufjs: true

@@ -23,20 +23,20 @@ describe('fetch_url SSRF guard', () => {
     ['IPv6 loopback', 'http://[::1]/'],
     ['a *.internal host', 'http://vault.internal/secret'],
   ])('refuses %s', async (_label, url) => {
-    const result = (await tool.run({ input: { url } })) as { url: string; text: string };
-    expect(result.text).toMatch(/^\(refused:/);
+    const result = (await tool.run({ data: { url } } as never)) as { output: { url: string; text: string } };
+    expect(result.output.text).toMatch(/^\(refused:/);
   });
 
   it.each([
     ['file://', 'file:///etc/passwd'],
     ['ftp://', 'ftp://example.com/x'],
   ])('refuses non-http(s) scheme %s', async (_label, url) => {
-    const result = (await tool.run({ input: { url } })) as { url: string; text: string };
-    expect(result.text).toMatch(/^\(refused:/);
+    const result = (await tool.run({ data: { url } } as never)) as { output: { url: string; text: string } };
+    expect(result.output.text).toMatch(/^\(refused:/);
   });
 
   it('refuses a malformed URL', async () => {
-    const result = (await tool.run({ input: { url: 'not a url' } })) as { url: string; text: string };
-    expect(result.text).toMatch(/^\(refused:/);
+    const result = (await tool.run({ data: { url: 'not a url' } } as never)) as { output: { url: string; text: string } };
+    expect(result.output.text).toMatch(/^\(refused:/);
   });
 });

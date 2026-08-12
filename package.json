@@ -20,6 +20,10 @@
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.1",
+    "@crabd/config": "workspace:*",
+    "@crabd/core": "workspace:*",
+    "@earendil-works/pi-ai": "0.83.0",
+    "@flue/runtime": "2.0.3",
     "@types/node": "^26.2.0",
     "typescript": "^7.0.2"
   }

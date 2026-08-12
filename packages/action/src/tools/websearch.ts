@@ -132,18 +132,18 @@ export function webSearchTools(options: { maxResults: number }): ToolDefinition[
         results: v.array(v.object({ title: v.string(), url: v.string(), snippet: v.string() })),
         note: v.optional(v.string()),
       }),
-      async run({ input }) {
+      async run({ data }) {
         const key = process.env.TAVILY_API_KEY;
         try {
           const results = key
-            ? await tavilySearch(input.query, options.maxResults, key)
-            : await duckduckgoSearch(input.query, options.maxResults);
+            ? await tavilySearch(data.query, options.maxResults, key)
+            : await duckduckgoSearch(data.query, options.maxResults);
           if (results.length === 0) {
-            return { results, note: 'No results. Set TAVILY_API_KEY for more reliable search, or try fetch_url on a known URL.' };
+            return { output: { results, note: 'No results. Set TAVILY_API_KEY for more reliable search, or try fetch_url on a known URL.' } };
           }
-          return { results };
+          return { output: { results } };
         } catch (error) {
-          return { results: [], note: `web_search failed: ${error instanceof Error ? error.message : String(error)}` };
+          return { output: { results: [], note: `web_search failed: ${error instanceof Error ? error.message : String(error)}` } };
         }
       },
     }),
@@ -152,22 +152,22 @@ export function webSearchTools(options: { maxResults: number }): ToolDefinition[
       description: 'Fetch a web page (e.g. docs or an issue found via web_search) and return its text content.',
       input: v.object({ url: v.string() }),
       output: v.object({ url: v.string(), text: v.string() }),
-      async run({ input }) {
+      async run({ data }) {
         try {
-          await assertPublicUrl(input.url);
+          await assertPublicUrl(data.url);
         } catch (error) {
-          return { url: input.url, text: `(refused: ${error instanceof Error ? error.message : 'blocked URL'})` };
+          return { output: { url: data.url, text: `(refused: ${error instanceof Error ? error.message : 'blocked URL'})` } };
         }
         try {
-          const res = await fetch(input.url, {
+          const res = await fetch(data.url, {
             headers: { 'user-agent': 'Mozilla/5.0 (compatible; crabd-bot)' },
             signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
           });
-          if (!res.ok) return { url: input.url, text: `(failed to fetch: HTTP ${res.status})` };
+          if (!res.ok) return { output: { url: data.url, text: `(failed to fetch: HTTP ${res.status})` } };
           const text = htmlToText(await res.text());
-          return { url: input.url, text: text.slice(0, 20_000) };
+          return { output: { url: data.url, text: text.slice(0, 20_000) } };
         } catch (error) {
-          return { url: input.url, text: `(failed to fetch: ${error instanceof Error ? error.message : String(error)})` };
+          return { output: { url: data.url, text: `(failed to fetch: ${error instanceof Error ? error.message : String(error)})` } };
         }
       },
     }),
