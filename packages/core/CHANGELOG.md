@@ -1,5 +1,11 @@
 # @crabd/core
 
+## 1.0.1
+
+### Patch Changes
+
+- @crabd/config@1.0.1
+
 ## 1.0.0
 
 ### Minor Changes
