@@ -42,6 +42,17 @@ const SUBMIT_NUDGE = [
   'Call `submit` now with the answer you just gave.',
 ].join(' ');
 
+/**
+ * Re-runs of a turn whose *harness* lost the conversation rather than whose model failed. One is
+ * enough: a fresh instance starts from an empty conversation, so either the replacement turn runs or
+ * the stale tail was never the problem.
+ */
+const MAX_HARNESS_RETRIES = 1;
+
+function log(message: string): void {
+  process.stderr.write(`[crabd] ${message}\n`);
+}
+
 export interface TurnInput {
   mode: string;
   message: string;
@@ -99,6 +110,40 @@ export function describeTurnError(error: unknown): string {
     if (typeof value === 'string') parts.push(value);
   }
   return parts.length > 0 ? parts.join(' | ') : JSON.stringify(error);
+}
+
+/**
+ * The provider failure behind a `[flue:model-retry]` log event.
+ *
+ * flue reports the error it is about to retry on the log event's `attributes.error` and its CLI
+ * prints only the message, so without reading the attributes a run's entire record of why the model
+ * failed is the words "Retrying transient model error". That matters beyond the log: the retry can
+ * then fail for a reason of its own (see {@link isHarnessRecoveryFailure}) and the actual cause is
+ * gone by the time anything classifies the attempt.
+ */
+export function retryErrorDetail(attributes: unknown): string {
+  if (!attributes || typeof attributes !== 'object') return '';
+  const { error } = attributes as { error?: unknown };
+  return error ? describeTurnError(error) : '';
+}
+
+/**
+ * Whether a failure is flue's recovery path giving up on the conversation rather than the model
+ * refusing the work.
+ *
+ * flue retries a transient model error by resuming the conversation it already has. When that
+ * conversation's tail projects to an assistant message, pi-agent-core's `continue()` rejects it and
+ * the turn dies holding an answer it was seconds away from submitting. The model is not at fault and
+ * the same instance can never recover, because its persisted tail is the thing that breaks it, so the
+ * only useful response is to re-run the turn on a fresh one.
+ *
+ * Observed on flue 2.0.3, where `runModelTurnWithRecovery` guards exactly this case with a `restart`
+ * callback that the durable dispatch path crab'd uses never passes.
+ */
+export function isHarnessRecoveryFailure(message: string): boolean {
+  return /cannot continue from message role|cannot continue: no messages in context|no messages to continue from/i.test(
+    message,
+  );
 }
 
 /** Fetch image URLs into inline base64 attachments for a vision-capable model. */
@@ -172,7 +217,13 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
 
   let lastTurnError = '';
   const unsubscribe = observe((event) => {
-    const e = event as unknown as { type: string; message?: string; isError?: boolean; error?: unknown };
+    const e = event as unknown as {
+      type: string;
+      message?: string;
+      isError?: boolean;
+      error?: unknown;
+      attributes?: unknown;
+    };
     // Any event carrying a serialized error, not just `turn`: a `turn` failure reports `isError` with
     // a null `error`, and the provider's status only appears on the `operation` and
     // `submission_settled` events. Keep the latest, which is the one that ended the attempt.
@@ -194,6 +245,15 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
       return;
     }
     if (e.type === 'log' && typeof e.message === 'string' && e.message.includes('flue:model-retry')) {
+      // A retry is the one place the provider's own reason is on a `log` event rather than on the
+      // `error` field read above, so it needs its own hop out of the attributes. Recorded as
+      // `lastTurnError` too: if the retry itself then fails opaquely, this is what lets the fallback
+      // chain classify the attempt on the failure that actually started it.
+      const detail = retryErrorDetail(e.attributes);
+      if (detail) {
+        lastTurnError = detail;
+        log(`model retry: ${detail}`);
+      }
       postRateLimited({ mode: input.mode, provider: providerOf(currentModel), switching: false });
     }
   });
@@ -210,7 +270,12 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
   const readResult = (data: Record<string, unknown[]> | undefined): JsonValue | undefined =>
     data?.result?.at(-1) as JsonValue | undefined;
 
-  const runOnce = async (model: string, index: number): Promise<AttemptResult> => {
+  /**
+   * One turn on one instance. Everything that makes a turn a turn lives here (the budget, the
+   * wrap-up, the submit nudges, the repair pass), so that {@link runOnce} is left deciding only
+   * whether the instance itself is worth replacing.
+   */
+  const runAttempt = async (model: string, instanceId: string): Promise<AttemptResult> => {
     currentModel = model;
     toolStarts = 0;
     lastTurnError = '';
@@ -220,7 +285,7 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
     // A fresh instance per attempt, so a rate-limited attempt is never carried into the retry's
     // context. This is what `harness.session('crabd-fallback-N')` bought in flue 1; `harness.prompt`
     // would have continued one scratch conversation instead.
-    const handle = init(CrabdTurn, { id: `${ctx.runId}-${index}` });
+    const handle = init(CrabdTurn, { id: instanceId });
     currentAbort = () => handle.abort();
 
     const creation: TurnCreation = { mode: input.mode, model, instructions: input.instructions };
@@ -271,6 +336,26 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
     }
     if (data === undefined) throw new Error('crabd: the model never called submit');
     return await repair(handle, model, { data, model });
+  };
+
+  /**
+   * One position in the fallback chain. A harness-level failure says nothing about the model, so
+   * spending a chain position on it (and demoting the run to a weaker fallback, or exhausting the
+   * chain outright) answers the wrong question: the conversation is what has to be replaced. Hence a
+   * bounded re-run here, on the same model. It does cost a whole turn over again, which is worth it
+   * only against the alternative, where the finished review is discarded and the check fails.
+   */
+  const runOnce = async (model: string, index: number): Promise<AttemptResult> => {
+    for (let retry = 0; ; retry++) {
+      const instanceId = retry === 0 ? `${ctx.runId}-${index}` : `${ctx.runId}-${index}r${retry}`;
+      try {
+        return await runAttempt(model, instanceId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (retry >= MAX_HARNESS_RETRIES || !isHarnessRecoveryFailure(message)) throw error;
+        log(`the harness could not resume the conversation (${message}), re-running the turn on a fresh instance`);
+      }
+    }
   };
 
   /**

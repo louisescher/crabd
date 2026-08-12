@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { classifyModelError } from '@crabd/core';
-import { describeTurnError } from './turn-runner.ts';
+import { describeTurnError, isHarnessRecoveryFailure, retryErrorDetail } from './turn-runner.ts';
 
 /**
  * The pairing these tests protect: `handle.read()` rejects with an `AgentRunError` carrying only
@@ -52,5 +52,52 @@ describe('describeTurnError', () => {
 
   it('falls back to JSON for a shape it does not recognize', () => {
     expect(describeTurnError({ weird: true })).toBe('{"weird":true}');
+  });
+});
+
+/**
+ * What broke a real review run: the model hung for five minutes, flue retried the transient error,
+ * the retry could not resume the conversation, and the run reported the harness message alone. The
+ * provider's reason was on the retry log event's attributes the whole time and nothing read it.
+ */
+describe('retryErrorDetail', () => {
+  it('reads the provider reason off a retry log event, so a later opaque failure stays classifiable', () => {
+    // `waitForTransientModelRetry` passes `assistant.errorMessage`, so `error` is already a string.
+    const detail = retryErrorDetail({ attempt: 1, maxRetries: 3, delayMs: 1900, error: '503 upstream timeout' });
+    expect(detail).toBe('503 upstream timeout');
+    expect(classifyModelError(detail)).toBe('transient_other');
+  });
+
+  it('flattens a serialized Error, which is what a non-string cause normalizes to', () => {
+    const detail = retryErrorDetail({ error: { message: 'call failed', meta: { reason: '529 overloaded' } } });
+    expect(classifyModelError(detail)).toBe('rate_limit');
+  });
+
+  it('stays empty for attributes that carry no error, so nothing overwrites a real reason', () => {
+    expect(retryErrorDetail({ attempt: 1 })).toBe('');
+    expect(retryErrorDetail(undefined)).toBe('');
+    expect(retryErrorDetail('not an object')).toBe('');
+  });
+});
+
+describe('isHarnessRecoveryFailure', () => {
+  it('recognizes the assistant-tail rejection that pi-agent-core throws on resume', () => {
+    expect(isHarnessRecoveryFailure('Cannot continue from message role: assistant')).toBe(true);
+    // As it arrives in practice, with the retry reason joined on by `runAttempt`.
+    expect(isHarnessRecoveryFailure('Cannot continue from message role: assistant | 503 upstream timeout')).toBe(true);
+  });
+
+  it('recognizes the other continue() refusals from the same guard', () => {
+    expect(isHarnessRecoveryFailure('Cannot continue: no messages in context')).toBe(true);
+    expect(isHarnessRecoveryFailure('No messages to continue from')).toBe(true);
+  });
+
+  it('leaves failures a fresh instance cannot fix alone', () => {
+    // A deliberate budget abort must not buy a second full turn.
+    expect(isHarnessRecoveryFailure('crabd: max_turns (40) exceeded')).toBe(false);
+    expect(isHarnessRecoveryFailure('crabd: the model never called submit')).toBe(false);
+    expect(isHarnessRecoveryFailure('429 Too Many Requests')).toBe(false);
+    expect(isHarnessRecoveryFailure('400 invalid_request_error')).toBe(false);
+    expect(isHarnessRecoveryFailure('')).toBe(false);
   });
 });
