@@ -1,5 +1,37 @@
 # @crabd/config
 
+## 1.0.0
+
+### Minor Changes
+
+- bd01e16: Migrate to Flue 2 and run the agent in-process.
+
+  Flue 2 removes `defineWorkflow`, `defineAgent`'s config bag, `flue build`, and the auto-mounted router, so crab'd's two workflows are now agent functions (`src/agents/`) driven by `start()` plus `init()/dispatch()/read()` from the CLI itself. The `flue run` subprocess, its stdout JSON protocol with a 64 MB buffer, `app.ts`, `flue.config.ts`, and the `@flue/cli` dependency are all gone; the image builds one tsdown bundle.
+
+  Orchestration that used to live inside the workflow body now lives in `src/turn-runner.ts`, because an agent in v2 is one addressable conversation: the rate-limit fallback chain opens a fresh instance per attempt (preserving the clean-context retry that `harness.session()` gave), the repair pass dispatches to the same instance so it keeps what it read, and the verify stage addresses one refuter instance per finding instead of delegating. v2 delegation is model-driven through the `task` tool, which could not have kept that fan-out deterministic.
+
+  Two guarantees the framework used to provide are now explicit: the turn budget (v2 enforces no step cap) counts tool starts and stops applying once the wrap-up is in flight, so a run that exhausts its budget still returns a partial answer; and the mode's output schema is enforced by a terminal `submit` tool with a stated directive and a bounded nudge, replacing the `result` option's built-in re-prompt loop.
+
+  Custom providers are now real pi-ai providers built from config rather than flue registrations, which is what makes the new `providers.custom[].reasoning` and `providers.custom[].vision` fields possible — flue's registration surface could not express either at any version, so a self-hosted reasoning model silently received no thinking controls and images sent to a self-hosted vision model were silently replaced with an `(image omitted)` placeholder.
+
+  The rate-limit fallback chain needed rescuing: `handle.read()` rejects with an `AgentRunError` carrying only `{ outcome, submissionId }`, so classifying the rejection saw no status code, called every rate limit fatal, and never switched models. The provider's status is captured from the runtime event stream instead (`operation` and `submission_settled` carry it; a failed `turn` event reports `isError` with a null `error`).
+
+  Per-run configuration is passed as values through a run context instead of ~20 `CRABD_*` env vars, which only existed to cross the process boundary.
+
+  `providers.custom[].base_url` is now optional per layer (a higher layer can override one field), and `resolveConfig` throws when no layer supplied one.
+
+- bd01e16: Merge keyed config lists field by field instead of replacing whole entries. A layer that overrides one field of a `providers.custom` entry (by `id`) or an `mcp` entry (by `name`) now keeps the lower layer's remaining fields.
+
+  Previously a higher layer replaced the entry outright, so a CI layer injecting a provider's `base_url` silently dropped that entry's `api_key_env` and `context_window`. A dropped `context_window` capped every model response at a single output token, which surfaced as the agent emitting one reasoning token and never calling a tool.
+
+- a19a41d: Add repo-managed memory: reply to a crab'd comment to correct it, and it records what it learned as a markdown file under `.crabd/memory/`, read back into every future run. The files are plain markdown in your repository, so memories are reviewed in a pull request, edited, and deleted like any other file. Off by default via `memory.enabled`. Once enabled, `memory.write` chooses whether a recorded memory lands on the pull request branch (the default), in a dedicated pull request, or straight on the default branch.
+
+  Replying to an inline review finding now also carries the thread it answers. `getContext` fetched only the issue-level comment timeline, which never contains inline review comments, so a reply arrived with the correction but not the finding it was correcting, missing its path, line, and diff hunk. Both adapters now reconstruct the thread: GitHub from `in_reply_to_id`, Forgejo (which does not report reply ids) by grouping co-located comments on the same file and anchor.
+
+  crab'd's own inline findings carry a hidden marker so a later run can tell its own finding from a human's comment at the root of a thread. The bot's login varies by install, so the author field could not answer that.
+
+  Tracking comments can now carry run-scoped advisories, rendered below a rule above the footer and repeated on every state of the comment. Memory uses this to say up front, before the model starts, when recording is on but crab'd cannot write, rather than failing a commit after the work is done. In that case the tool is not offered to the model at all, so no write is attempted. A token whose scope cannot be introspected (a PAT or workflow token) is treated as unknown, never as "no access", so this raises no false warning.
+
 ## 0.9.0
 
 ### Minor Changes
