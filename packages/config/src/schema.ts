@@ -46,8 +46,11 @@ export type PromptPartial = v.InferOutput<typeof PromptPartialSchema>;
 export const CustomProviderSchema = v.object({
   /** Provider ID used in model specifiers, e.g. `my-llm` in `my-llm/model-name`. */
   id: v.string(),
-  /** Endpoint root, e.g. `https://llm.internal/v1`. */
-  base_url: v.string(),
+  /**
+   * Endpoint root, e.g. `https://llm.internal/v1`. Optional per layer so a higher layer can override
+   * one field of a lower layer's entry; the resolved entry must have one, or `resolveConfig` throws.
+   */
+  base_url: v.optional(v.string()),
   /** Wire protocol slug. Defaults to `openai-completions` (most OpenAI-compatible APIs). */
   api: v.optional(v.string()),
   /** Env var whose value is used as the API key for this provider. */
@@ -63,6 +66,17 @@ export const CustomProviderSchema = v.object({
    * vLLM and friends is the whole window minus the prompt.
    */
   max_tokens: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
+  /**
+   * Whether the served model produces reasoning output. Set it for a reasoning model the built-in
+   * catalog does not know, or crab'd sends no thinking controls and `thinking_level` has no effect.
+   */
+  reasoning: v.optional(v.boolean()),
+  /**
+   * Whether the served model accepts images. Off by default: an image sent to a model that cannot
+   * read them is replaced with an `(image omitted)` placeholder, so screenshots in a comment would be
+   * silently dropped rather than answered.
+   */
+  vision: v.optional(v.boolean()),
 });
 export type CustomProvider = v.InferOutput<typeof CustomProviderSchema>;
 

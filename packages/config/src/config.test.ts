@@ -310,6 +310,12 @@ describe('resolveConfig — custom providers', () => {
     expect(r.providers.custom[0]?.contextWindow).toBe(1048576);
   });
 
+  it('rejects a resolved custom provider with no base_url in any layer', () => {
+    expect(() =>
+      resolveConfig({ layers: { repo: { providers: { custom: [{ id: 'llm', context_window: 1024 }] } } } }),
+    ).toThrow(/base_url/);
+  });
+
   it('rejects a non-positive context_window rather than treating it as unknown', () => {
     expect(() =>
       parseConfigObject({
@@ -348,6 +354,58 @@ providers:
       { id: 'shared', baseUrl: 'https://repo/v1' },
       { id: 'repo-only', baseUrl: 'https://x/v1' },
     ]);
+  });
+
+  it('merges same-id custom providers field by field, so a partial override keeps the rest', () => {
+    const r = resolveConfig({
+      layers: {
+        org: {
+          providers: {
+            custom: [
+              {
+                id: 'deepseek',
+                base_url: 'http://placeholder:8000/v1',
+                api: 'openai-completions',
+                api_key_env: 'DEEPSEEK_API_KEY',
+                context_window: 1048576,
+              },
+            ],
+          },
+        },
+        // A CI layer that only knows the real endpoint must not drop the org layer's other fields:
+        // losing `context_window` capped every model response at a single output token.
+        env: { providers: { custom: [{ id: 'deepseek', base_url: 'https://llm.internal/v1' }] } },
+      },
+    });
+    expect(r.providers.custom).toEqual([
+      {
+        id: 'deepseek',
+        baseUrl: 'https://llm.internal/v1',
+        api: 'openai-completions',
+        apiKeyEnv: 'DEEPSEEK_API_KEY',
+        contextWindow: 1048576,
+      },
+    ]);
+  });
+
+  it('lets a higher layer override a merged field outright', () => {
+    const r = resolveConfig({
+      layers: {
+        org: { providers: { custom: [{ id: 'llm', base_url: 'https://a/v1', context_window: 1048576 }] } },
+        env: { providers: { custom: [{ id: 'llm', context_window: 262144 }] } },
+      },
+    });
+    expect(r.providers.custom[0]).toEqual({ id: 'llm', baseUrl: 'https://a/v1', contextWindow: 262144 });
+  });
+
+  it('merges mcp servers by name field by field', () => {
+    const r = resolveConfig({
+      layers: {
+        org: { mcp: [{ name: 'docs', url: 'https://a/mcp', headers: { Authorization: 'Bearer x' } }] },
+        repo: { mcp: [{ name: 'docs', url: 'https://b/mcp' }] },
+      },
+    });
+    expect(r.mcp).toEqual([{ name: 'docs', url: 'https://b/mcp', headers: { Authorization: 'Bearer x' } }]);
   });
 });
 

@@ -31,7 +31,8 @@ COPY apps/docs/package.json ./apps/docs/
 # Install only the action and its workspace dependencies (config, core) + their deps.
 RUN pnpm install --frozen-lockfile --filter @crabd/action...
 
-# Build config, core, and the action (tsdown + `flue build`).
+# Build config, core, and the action. One tsdown bundle now: the agents run in-process, so there
+# is no separate Flue server to build.
 COPY packages/config ./packages/config
 COPY packages/core ./packages/core
 COPY packages/action ./packages/action

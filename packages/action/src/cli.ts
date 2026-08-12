@@ -1,10 +1,14 @@
 #!/usr/bin/env node
-import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { loadCrabdExtension, providerOf, type ResolvedConfig } from '@crabd/config';
+import { join } from 'node:path';
+import { init } from '@flue/runtime';
+import { start } from '@flue/runtime/node';
+import {
+  loadCrabdExtension,
+  type ResolvedConfig,
+  type ResolvedRateLimit,
+} from '@crabd/config';
 import {
   describeCommentableLines,
   finalizeRun,
@@ -19,8 +23,14 @@ import {
   type ForgeEvent,
   type ModeDefinition,
 } from '@crabd/core';
+import { buildClassifyMessage, CrabdClassify, type ClassifyCreation } from './agents/crabd-classify.ts';
+import { CrabdRefuter } from './agents/crabd-refuter.ts';
+import { CrabdTurn } from './agents/crabd-turn.ts';
 import { loadResolvedConfig } from './config-loader.ts';
 import { buildForge, detectForge } from './forge-factory.ts';
+import { buildProviders, unsizedCustomModels } from './providers.ts';
+import { buildRunContext, runContext, setRunContext, type ProgressTarget } from './run-context.ts';
+import { runTurn } from './turn-runner.ts';
 import {
   forgeHost,
   gitCredentialEnv,
@@ -29,8 +39,6 @@ import {
   renderNpmrcAdvisory,
   scopedRepoNames,
 } from './sandbox.ts';
-
-const ACTION_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 function log(message: string): void {
   process.stderr.write(`[crabd] ${message}\n`);
@@ -43,33 +51,6 @@ function log(message: string): void {
 function warn(message: string): void {
   if (process.env.GITHUB_ACTIONS === 'true') process.stdout.write(`::warning::[crabd] ${message}\n`);
   process.stderr.write(`[crabd] ${message}\n`);
-}
-
-/**
- * Locate the flue CLI entry so we can run the model turn as a one-shot subprocess.
- * `@flue/cli` only exposes `./config` (ESM-only, no `require` condition), so we use
- * `import.meta.resolve` — not `require.resolve` — then walk up to the package root
- * to read its `bin`.
- */
-function flueCliEntry(): string {
-  const resolver = import.meta as unknown as { resolve(specifier: string): string };
-  const configEntry = fileURLToPath(resolver.resolve('@flue/cli/config'));
-  let dir = dirname(configEntry);
-  for (let i = 0; i < 12 && dir !== dirname(dir); i++) {
-    const pkgFile = join(dir, 'package.json');
-    if (existsSync(pkgFile)) {
-      const pkg = JSON.parse(readFileSync(pkgFile, 'utf-8')) as {
-        name?: string;
-        bin?: Record<string, string> | string;
-      };
-      if (pkg.name === '@flue/cli' && pkg.bin) {
-        const bin = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin.flue;
-        if (bin) return join(dir, bin);
-      }
-    }
-    dir = dirname(dir);
-  }
-  throw new Error('crabd: could not locate the flue CLI entry');
 }
 
 /** Extract image URLs from markdown (`![](url)`) and bare image links in text. */
@@ -86,10 +67,9 @@ function extractImageUrls(...texts: (string | undefined)[]): string[] {
 }
 
 /**
- * The discriminated result the crabd-turn workflow prints on stdout: a success
- * (carrying the mode's structured `data` + which model produced it), or an
- * in-scope rate-limit exhaustion. Any other (fatal) failure throws from the
- * subprocess instead and is handled by the generic error path.
+ * The discriminated result of one turn: a success (carrying the mode's structured `data` + which
+ * model produced it), or an in-scope rate-limit exhaustion. Any other (fatal) failure throws
+ * instead and is handled by the generic error path.
  */
 type CrabdTurnResult =
   | { ok: true; data: unknown; meta?: { modelUsed?: string; fellBackFrom?: string; partial?: boolean } }
@@ -122,28 +102,28 @@ function toFailureKind(kind: string): FailureKind {
   return (TAILORED_FAILURE_KINDS as readonly string[]).includes(kind) ? (kind as FailureKind) : 'error';
 }
 
-/** What the turn subprocess needs to run a mode's semantic self-check. See `ValidateContext`. */
+/** What a mode needs to run its semantic self-check. See `ValidateContext`. */
 interface TurnValidation {
   changedPaths: string[];
   anchorable: { path: string; ranges: string[] }[];
 }
 
-/** Run `flue run workflow:crabd-turn` once and return the parsed structured result. */
-function runFlueTurn(
+/** Run one crab'd turn in this process and return its structured result. */
+async function runCrabdTurn(
   mode: string,
   message: string,
+  instructions: string,
+  model: string,
   images: string[],
-  validation?: TurnValidation,
-): CrabdTurnResult {
-  const input = JSON.stringify({ mode, message, images, ...(validation ? { validation } : {}) });
-  const stdout = execFileSync(
-    process.execPath,
-    [flueCliEntry(), 'run', 'workflow:crabd-turn', '--input', input],
-    { cwd: ACTION_DIR, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: 64 * 1024 * 1024 },
+  validation: TurnValidation | undefined,
+  rateLimit: ResolvedRateLimit,
+): Promise<CrabdTurnResult> {
+  const outcome = await runTurn(
+    { mode, message, instructions, images, ...(validation ? { validation } : {}) },
+    rateLimit,
+    model,
   );
-  const trimmed = stdout.trim();
-  if (!trimmed) throw new Error('crabd: the model turn produced no result');
-  return JSON.parse(trimmed) as CrabdTurnResult;
+  return outcome as unknown as CrabdTurnResult;
 }
 
 /**
@@ -151,17 +131,16 @@ function runFlueTurn(
  * mode, or `undefined` on any failure — the caller then keeps the default `mention`. This is
  * the `ClassifyFn` prepareRun calls; it runs a separate low-thinking, no-tools model pass.
  */
-function runFlueClassify(request: ClassifyRequest): { mode: string } | undefined {
+async function runCrabdClassify(request: ClassifyRequest): Promise<{ mode: string } | undefined> {
   try {
-    const stdout = execFileSync(
-      process.execPath,
-      [flueCliEntry(), 'run', 'workflow:crabd-classify', '--input', JSON.stringify(request)],
-      { cwd: ACTION_DIR, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: 8 * 1024 * 1024 },
-    );
-    const trimmed = stdout.trim();
-    if (!trimmed) return undefined;
-    const parsed = JSON.parse(trimmed) as { mode?: string };
-    return parsed.mode ? { mode: parsed.mode } : undefined;
+    const handle = init(CrabdClassify, { id: `${runContext().runId}-classify` });
+    const receipt = await handle.dispatch({
+      message: buildClassifyMessage(request),
+      initialData: { candidates: request.candidates, model: classifyModel } satisfies ClassifyCreation,
+    });
+    const reply = await handle.read(receipt);
+    const picked = (reply.data?.mode?.at(-1) as { mode?: string } | undefined)?.mode;
+    return picked ? { mode: picked } : undefined;
   } catch (error) {
     log(`classify failed, keeping mention: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
@@ -169,56 +148,33 @@ function runFlueClassify(request: ClassifyRequest): { mode: string } | undefined
 }
 
 /**
- * Register the model providers with the Flue subprocesses via env (read by app.ts): user-defined
- * custom providers and any egress-gateway routing. Independent of the mode, so it is applied
- * before prepareRun — the classify pass needs it too, and it runs inside prepareRun.
+ * Boot the agent runtime in this process.
+ *
+ * The turn used to run as a `flue run` subprocess, which is why so much of the configuration was
+ * serialized into `CRABD_*` env vars. `start()` mirrors what a built server does at boot with no HTTP
+ * surface, so the turn is now a function call and the providers are real objects rather than JSON.
  */
-function applyProviderEnv(config: {
-  providers: { custom: { id: string }[]; allowlist: string[]; gatewayUrl?: string | null };
-}): void {
-  if (config.providers.custom.length > 0) {
-    process.env.CRABD_CUSTOM_PROVIDERS = JSON.stringify(config.providers.custom);
-  }
-  // Egress gateway: route allowlisted built-in providers through `${gateway}/<provider>`.
-  // Custom providers (own base_url) and ollama are excluded.
-  if (config.providers.gatewayUrl) {
-    const customIds = new Set(config.providers.custom.map((p) => p.id));
-    const gatewayProviders = config.providers.allowlist.filter((id) => !customIds.has(id) && id !== 'ollama');
-    if (gatewayProviders.length > 0) {
-      process.env.CRABD_GATEWAY_URL = config.providers.gatewayUrl;
-      process.env.CRABD_GATEWAY_PROVIDERS = JSON.stringify(gatewayProviders);
-    }
-  }
+async function startRuntime(config: ResolvedConfig): Promise<{ stop(): Promise<void> }> {
+  const providers = buildProviders(config);
+  return await start({
+    agents: [CrabdTurn, CrabdClassify, CrabdRefuter],
+    ...(providers ? { providers } : {}),
+  });
 }
 
 /**
  * Warn when a model runs on a custom provider that declares no `context_window`.
  *
- * The agent framework treats an unknown window as zero, which has two silent consequences: context
- * compaction fires on every turn, and the per-request output cap collapses to a single token — the
- * model then emits one reasoning token, never calls a tool, and the turn fails after the framework's
- * follow-up ceiling with nothing that points back here.
+ * An unknown window is treated as zero, which has two silent consequences: context compaction fires
+ * on every turn, and the per-request output cap collapses to a single token — the model then emits one
+ * reasoning token, never calls a tool, and the turn fails with nothing that points back here.
  */
 function warnUnsizedCustomProviders(config: ResolvedConfig): void {
-  const unsized = new Map(
-    config.providers.custom.filter((p) => p.contextWindow === undefined).map((p) => [p.id, p]),
-  );
-  if (unsized.size === 0) return;
-
-  const specs = [
-    config.model,
-    ...Object.values(config.modes).map((m) => m.model),
-    ...config.rateLimit.fallbackModels,
-    config.review.verify.model,
-  ].filter((spec): spec is string => Boolean(spec));
-
-  for (const id of new Set(specs.map(providerOf))) {
-    const provider = unsized.get(id);
-    if (!provider) continue;
+  for (const spec of unsizedCustomModels(config)) {
     warn(
-      `providers.custom "${id}" has no context_window — the model's context window is treated as unknown, ` +
-        'which compacts on every turn and caps each response at one output token. Set ' +
-        `providers.custom[${id}].context_window to the window your endpoint serves.`,
+      `model ${spec} runs on a custom provider with no context_window — its context window is treated ` +
+        'as unknown, which compacts on every turn and caps each response at one output token. Set ' +
+        'that provider\'s context_window to the window your endpoint serves.',
     );
   }
 }
@@ -254,6 +210,10 @@ async function registerExtensionModes(extensionPath: string | undefined, cwd: st
     if (mode && typeof mode.name === 'string') registerMode(mode);
   }
 }
+
+let runtime: { stop(): Promise<void> } | undefined;
+/** The model the classify pass uses: the config default, before a per-mode override applies. */
+let classifyModel = 'anthropic/claude-haiku-4-5';
 
 async function main(): Promise<number> {
   registerBuiltinModes();
@@ -305,15 +265,17 @@ async function main(): Promise<number> {
     delete config.repos.read;
   }
 
-  // Wiring the classify pass needs before prepareRun runs it: providers must be registered so
-  // the subprocess can reach the model, the model to use (the primary — the main turn overwrites
-  // CRABD_MODEL below with the per-mode model), and the checkout for its sandbox.
-  applyProviderEnv(config);
+  // Wiring the classify pass needs before prepareRun runs it: the runtime (so the model is reachable),
+  // the model to use (the primary — the main turn overwrites CRABD_MODEL below with the per-mode
+  // model), and the checkout for its sandbox.
   warnUnsizedCustomProviders(config);
-  process.env.CRABD_MODEL = config.model;
-  process.env.CRABD_CWD = cwd;
+  // The classify pass runs inside prepareRun, so both the context and the runtime have to exist by
+  // now. The turn re-installs the context below with the plan's per-mode dials.
+  setRunContext(buildRunContext({ config, cwd, runId: `crabd-${event.repo.name}-classify` }));
+  classifyModel = config.model;
+  runtime = await startRuntime(config);
 
-  const outcome = await prepareRun({ adapter, config, event, cwd, classify: async (req) => runFlueClassify(req) });
+  const outcome = await prepareRun({ adapter, config, event, cwd, classify: async (req) => runCrabdClassify(req) });
   if (outcome.status === 'skip') {
     log(`skip: ${outcome.reason}`);
     return 0;
@@ -342,54 +304,35 @@ async function main(): Promise<number> {
     }
   }
 
-  // Hand the resolved dials to the Flue turn via env. max_turns is a HARD ceiling
-  // enforced inside the turn (abort on tool-call count) — deliberately NOT injected
-  // into the prompt, so the model isn't biased into finishing early.
-  process.env.CRABD_MODEL = plan.model;
-  process.env.CRABD_THINKING_LEVEL = plan.thinkingLevel;
-  process.env.CRABD_INSTRUCTIONS = plan.instructions;
-  process.env.CRABD_CWD = cwd;
-  if (config.limits.maxTurns) process.env.CRABD_MAX_TURNS = String(config.limits.maxTurns);
-  if (extensionPath) process.env.CRABD_EXTENSION_PATH = extensionPath;
-  // Provider registration env (custom providers + egress gateway) was already applied before
-  // prepareRun (the classify pass needs it) — see applyProviderEnv above.
-  if (config.mcp.length > 0) process.env.CRABD_MCP = JSON.stringify(config.mcp);
-  process.env.CRABD_WEB_SEARCH = JSON.stringify(config.webSearch);
-  // The opt-in refutation pass. Only wire the diff through when it will actually be used — the
-  // refuters need it to know what changed, and it goes via a temp file because the turn input is a
-  // command-line argument that already carries the rendered prompt.
-  process.env.CRABD_REVIEW_VERIFY = JSON.stringify(config.review.verify);
+  // The resolved dials for this turn. max_turns is a HARD ceiling enforced by the runner (abort on
+  // tool-call count) — deliberately NOT injected into the prompt, so the model isn't biased into
+  // finishing early.
+  let diffPath: string | undefined;
+  // The opt-in refutation pass needs the diff to know what changed. It goes via a temp file rather
+  // than the prompt because every refuter reads the same bytes and the prompt already carries plenty.
   if (config.review.verify.enabled && plan.mode === 'review' && context.diff) {
     try {
-      const diffPath = join(tmpdir(), `crabd-diff-${plan.subject}.patch`);
+      diffPath = join(tmpdir(), `crabd-diff-${plan.subject}.patch`);
       writeFileSync(diffPath, context.diff, 'utf-8');
-      process.env.CRABD_DIFF_PATH = diffPath;
     } catch (error) {
+      diffPath = undefined;
       log(`review.verify: could not stage the diff, refuters will work from file contents only: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  // Branding for the comments the turn subprocess posts (progress + rate-limit updates).
-  process.env.CRABD_BRANDING = JSON.stringify(config.appearance);
-  // Rate-limit dials (backoff, fallback chain, wait budget). The turn subprocess
-  // does the retry/fallback; on_exhausted is applied here (it needs the mode).
-  process.env.CRABD_RATE_LIMIT = JSON.stringify(config.rateLimit);
-  if (config.limits.timeoutMinutes) {
-    process.env.CRABD_TIMEOUT_MS = String(Math.round(config.limits.timeoutMinutes * 60_000));
-  }
 
-  // Wire the live-progress tool: the turn subprocess needs a token + the tracking
-  // comment reference to post updates as it works.
+  // The live-progress tool needs a token + the tracking comment reference to post updates as it works.
+  let progress: ProgressTarget | undefined;
+  let forgeToken: string | undefined;
   try {
-    process.env.CRABD_FORGE_TOKEN = await auth.getToken();
-    process.env.CRABD_REPO_OWNER = event.repo.owner;
-    process.env.CRABD_REPO_NAME = event.repo.name;
-    process.env.CRABD_REPO_DEFAULT_BRANCH = event.repo.defaultBranch;
-    process.env.CRABD_TRACKING_ID = String(plan.tracking.id);
-    process.env.CRABD_SUBJECT = String(plan.subject);
+    forgeToken = await auth.getToken();
+    progress = { adapter, tracking: plan.tracking };
   } catch (error) {
     // Progress updates are best-effort; a token failure here shouldn't block the run.
     log(`progress tool disabled: ${error instanceof Error ? error.message : String(error)}`);
   }
+
+  // The mode's instructions, which the npmrc advisory below may append to.
+  let turnInstructions = plan.instructions;
 
   // --- Sandbox access: cross-repo read token, forwarded secrets, private-registry .npmrc ---
   // All opt-in via config. Anything placed here is visible to the model's (network-capable) shell.
@@ -484,14 +427,26 @@ async function main(): Promise<number> {
       writeFileSync(npmrcPath, npmrc, 'utf-8');
       sandboxEnv.NPM_CONFIG_USERCONFIG = npmrcPath;
     }
-    // The turn subprocess reads CRABD_INSTRUCTIONS (set above) — append, don't overwrite.
+    // Appended to the mode's instructions, not overwriting them.
     const advisory = renderNpmrcAdvisory(authStatuses);
-    if (advisory) process.env.CRABD_INSTRUCTIONS = `${process.env.CRABD_INSTRUCTIONS ?? ''}\n\n${advisory}`.trim();
+    if (advisory) turnInstructions = `${turnInstructions}\n\n${advisory}`.trim();
   }
 
-  if (Object.keys(sandboxEnv).length > 0) {
-    process.env.CRABD_SANDBOX_ENV = JSON.stringify(sandboxEnv);
-  }
+  // Everything the agents and the runner read about this run, in one place. The `CRABD_*` vars this
+  // replaces existed only because the turn was a subprocess.
+  setRunContext(
+    buildRunContext({
+      config,
+      cwd,
+      runId: `crabd-${plan.subject}-${plan.mode}`,
+      thinkingLevel: plan.thinkingLevel,
+      sandboxEnv,
+      ...(forgeToken ? { forgeToken } : {}),
+      repoSlug: event.repo.slug,
+      ...(diffPath ? { diffPath } : {}),
+      ...(progress ? { progress } : {}),
+    }),
+  );
 
   const images = extractImageUrls(event.comment?.body, context.issue?.body, context.pullRequest?.body);
 
@@ -505,14 +460,13 @@ async function main(): Promise<number> {
 
   let turn: CrabdTurnResult;
   try {
-    turn = runFlueTurn(plan.mode, plan.message, images, validation);
+    turn = await runCrabdTurn(plan.mode, plan.message, turnInstructions, plan.model, images, validation, config.rateLimit);
   } catch (error) {
     const raw = error instanceof Error ? error.message : String(error);
     log(`model turn failed: ${raw}`);
-    // The turn normally returns fatal failures structured (see below); this path is only a
-    // hard subprocess crash. execFileSync reports "Command failed: <full command + serialized
-    // prompt>" — never post that; the real cause is in the run logs (stderr is inherited there).
-    const detail = raw.startsWith('Command failed:') ? undefined : raw;
+    // The turn normally returns fatal failures structured (see below); this path is a throw that
+    // escaped the runner — an unregistered mode, or the runtime failing to reach the model at all.
+    const detail = raw;
     await reportRunError(adapter, plan, {
       kind: 'error',
       ...(detail ? { detail } : {}),
@@ -575,6 +529,11 @@ async function main(): Promise<number> {
 }
 
 main()
+  .finally(async () => {
+    // The agent runtime owns a durable submission coordinator and a SQLite handle; leaving them open
+    // keeps the process alive after the work is done.
+    await runtime?.stop().catch(() => {});
+  })
   .then((code) => process.exit(code))
   .catch((error) => {
     log(`fatal: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);

@@ -36,7 +36,7 @@ default. For how these values combine across the org repo, the repo file, CI inp
 | --- | --- | --- | --- |
 | `allowlist` | `string[]` | `[]` | Provider IDs crab'd may use. **Empty means allow any provider** (zero-config default). Set it — and lock it at the org level — to restrict egress; then a model or custom provider must be listed to be usable. |
 | `gateway_url` | `string \| null` | `null` | Org egress gateway. When set, each allowlisted built-in provider is routed through `${gateway_url}/<provider>`, keeping its normal credentials. |
-| `custom` | `CustomProvider[]` | `[]` | User-defined providers. **Reconciled by `id`** across layers — repos reuse org entries and add/override their own. |
+| `custom` | `CustomProvider[]` | `[]` | User-defined providers. **Reconciled by `id`** across layers, merging field by field — a layer that sets only `base_url` keeps the lower layer's other fields. |
 
 ### `CustomProvider`
 
@@ -48,6 +48,8 @@ default. For how these values combine across the org repo, the repo file, CI inp
 | `api_key_env` | `string` | — | Env var whose value is used as the API key. |
 | `context_window` | `number` | — | Total window (input + output) in tokens. Required for model IDs the built-in catalog does not know: see [Sizing a self-hosted model](#sizing-a-self-hosted-model). |
 | `max_tokens` | `number` | — | Per-response output cap. Omit to let the endpoint apply its own default (for vLLM, the whole window minus the prompt). |
+| `reasoning` | `boolean` | `false` | Whether the served model produces reasoning output. Required for a reasoning model the catalog does not know, or crab'd sends no thinking controls and `thinking_level` has no effect on it. |
+| `vision` | `boolean` | `false` | Whether the served model accepts images. Without it, images in a comment are replaced with an `(image omitted)` placeholder rather than answered. |
 
 ### Sizing a self-hosted model
 
@@ -69,6 +71,8 @@ providers:
       base_url: https://llm.internal/v1
       api_key_env: MY_LLM_KEY
       context_window: 1048576
+      reasoning: true   # a reasoning model the catalog does not know
+      vision: true      # accepts images
 ```
 
 Leave `max_tokens` unset unless you want to cap responses below what the endpoint allows. With it
