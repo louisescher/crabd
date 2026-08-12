@@ -46,6 +46,34 @@ default. For how these values combine across the org repo, the repo file, CI inp
 | `base_url` | `string` | — | Endpoint root, e.g. `https://llm.internal/v1`. |
 | `api` | `string` | `openai-completions` | Wire-protocol slug. |
 | `api_key_env` | `string` | — | Env var whose value is used as the API key. |
+| `context_window` | `number` | — | Total window (input + output) in tokens. Required for model IDs the built-in catalog does not know: see [Sizing a self-hosted model](#sizing-a-self-hosted-model). |
+| `max_tokens` | `number` | — | Per-response output cap. Omit to let the endpoint apply its own default (for vLLM, the whole window minus the prompt). |
+
+### Sizing a self-hosted model
+
+crab'd hydrates model metadata from a built-in catalog. A catalog model ID keeps its own window even
+behind a custom `base_url`, so nothing extra is needed. A model ID the catalog does not know (your own
+alias, e.g. `deepseek-v4-flash-max`) has no metadata, and an unknown window is treated as zero. Two
+things then go wrong silently: context compaction fires on every turn, and each request goes out
+capped at a single output token, so the model emits one reasoning token, never calls a tool, and the
+turn fails after the framework's follow-up ceiling.
+
+Set `context_window` to the window your endpoint serves and the run behaves normally:
+
+```yaml
+model: "my-llm/my-alias"
+providers:
+  allowlist: [my-llm]
+  custom:
+    - id: my-llm
+      base_url: https://llm.internal/v1
+      api_key_env: MY_LLM_KEY
+      context_window: 1048576
+```
+
+Leave `max_tokens` unset unless you want to cap responses below what the endpoint allows. With it
+unset, crab'd sends no output cap and the endpoint gives each response the whole remaining window.
+crab'd warns at startup when a model runs on a custom provider with no `context_window`.
 
 ## `permissions`
 

@@ -52,6 +52,17 @@ export const CustomProviderSchema = v.object({
   api: v.optional(v.string()),
   /** Env var whose value is used as the API key for this provider. */
   api_key_env: v.optional(v.string()),
+  /**
+   * Total context window (input + output) in tokens. Set this for models the catalog does not
+   * know, or the agent treats the window as unknown: context compaction fires on every turn and
+   * the request carries a 1-token output cap.
+   */
+  context_window: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
+  /**
+   * Per-response output cap in tokens. Omit to let the endpoint apply its own default, which for
+   * vLLM and friends is the whole window minus the prompt.
+   */
+  max_tokens: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
 });
 export type CustomProvider = v.InferOutput<typeof CustomProviderSchema>;
 

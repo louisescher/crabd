@@ -21,13 +21,20 @@ if (customProvidersRaw) {
       baseUrl: string;
       api?: string;
       apiKeyEnv?: string;
+      contextWindow?: number;
+      maxTokens?: number;
     }[];
     for (const p of providers) {
       const apiKey = p.apiKeyEnv ? process.env[p.apiKeyEnv] : undefined;
+      // `contextWindow`/`maxTokens` only reach models the catalog doesn't know: a catalog hit keeps
+      // its own metadata. Without a window the agent compacts every turn and the request goes out
+      // capped at a single output token, so an unset window is worth warning about (see below).
       registerProvider(p.id, {
         api: p.api ?? 'openai-completions',
         baseUrl: p.baseUrl,
         ...(apiKey ? { apiKey } : {}),
+        ...(p.contextWindow ? { contextWindow: p.contextWindow } : {}),
+        ...(p.maxTokens ? { maxTokens: p.maxTokens } : {}),
       });
     }
   } catch {

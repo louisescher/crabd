@@ -4,7 +4,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadCrabdExtension } from '@crabd/config';
+import { loadCrabdExtension, providerOf, type ResolvedConfig } from '@crabd/config';
 import {
   describeCommentableLines,
   finalizeRun,
@@ -192,6 +192,38 @@ function applyProviderEnv(config: {
 }
 
 /**
+ * Warn when a model runs on a custom provider that declares no `context_window`.
+ *
+ * The agent framework treats an unknown window as zero, which has two silent consequences: context
+ * compaction fires on every turn, and the per-request output cap collapses to a single token — the
+ * model then emits one reasoning token, never calls a tool, and the turn fails after the framework's
+ * follow-up ceiling with nothing that points back here.
+ */
+function warnUnsizedCustomProviders(config: ResolvedConfig): void {
+  const unsized = new Map(
+    config.providers.custom.filter((p) => p.contextWindow === undefined).map((p) => [p.id, p]),
+  );
+  if (unsized.size === 0) return;
+
+  const specs = [
+    config.model,
+    ...Object.values(config.modes).map((m) => m.model),
+    ...config.rateLimit.fallbackModels,
+    config.review.verify.model,
+  ].filter((spec): spec is string => Boolean(spec));
+
+  for (const id of new Set(specs.map(providerOf))) {
+    const provider = unsized.get(id);
+    if (!provider) continue;
+    warn(
+      `providers.custom "${id}" has no context_window — the model's context window is treated as unknown, ` +
+        'which compacts on every turn and caps each response at one output token. Set ' +
+        `providers.custom[${id}].context_window to the window your endpoint serves.`,
+    );
+  }
+}
+
+/**
  * Exhaustion behavior when every model in the chain was rate-limited: an explicit
  * `on_exhausted` config wins; otherwise the per-mode default — `review` soft-finishes
  * (green, so a transient limit doesn't block PRs), other modes fail the check.
@@ -277,6 +309,7 @@ async function main(): Promise<number> {
   // the subprocess can reach the model, the model to use (the primary — the main turn overwrites
   // CRABD_MODEL below with the per-mode model), and the checkout for its sandbox.
   applyProviderEnv(config);
+  warnUnsizedCustomProviders(config);
   process.env.CRABD_MODEL = config.model;
   process.env.CRABD_CWD = cwd;
 

@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import yaml from 'js-yaml';
+import { load } from 'js-yaml';
 
 /** A skill discovered under a repo skills root, summarized for the prompt manifest. */
 export interface SkillSummary {
@@ -85,7 +85,7 @@ function parseFrontmatter(source: string): Record<string, unknown> {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(source);
   if (!match) return {};
   try {
-    const doc = yaml.load(match[1]!);
+    const doc = load(match[1]!);
     return doc && typeof doc === 'object' && !Array.isArray(doc) ? (doc as Record<string, unknown>) : {};
   } catch {
     return {};

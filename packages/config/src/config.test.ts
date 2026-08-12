@@ -277,6 +277,59 @@ describe('resolveConfig — custom providers', () => {
     expect(resolveConfig({ layers: {} }).providers.custom).toEqual([]);
   });
 
+  it('carries context_window and max_tokens through for models the catalog does not know', () => {
+    const r = resolveConfig({
+      layers: {
+        repo: {
+          providers: {
+            allowlist: ['my-llm'],
+            custom: [
+              { id: 'my-llm', base_url: 'https://llm.internal/v1', context_window: 1048576, max_tokens: 384000 },
+            ],
+          },
+        },
+      },
+    });
+    expect(r.providers.custom).toEqual([
+      { id: 'my-llm', baseUrl: 'https://llm.internal/v1', contextWindow: 1048576, maxTokens: 384000 },
+    ]);
+  });
+
+  it('omits max_tokens when unset so the endpoint applies its own output default', () => {
+    const r = resolveConfig({
+      layers: {
+        repo: {
+          providers: {
+            allowlist: ['my-llm'],
+            custom: [{ id: 'my-llm', base_url: 'https://llm.internal/v1', context_window: 1048576 }],
+          },
+        },
+      },
+    });
+    expect(r.providers.custom[0]).not.toHaveProperty('maxTokens');
+    expect(r.providers.custom[0]?.contextWindow).toBe(1048576);
+  });
+
+  it('rejects a non-positive context_window rather than treating it as unknown', () => {
+    expect(() =>
+      parseConfigObject({
+        providers: { custom: [{ id: 'my-llm', base_url: 'https://x/v1', context_window: 0 }] },
+      }),
+    ).toThrow();
+  });
+
+  it('parses context_window and max_tokens from YAML', () => {
+    const cfg = parseConfigYaml(`
+providers:
+  custom:
+    - id: my-llm
+      base_url: https://llm.internal/v1
+      context_window: 1048576
+      max_tokens: 384000
+`);
+    expect(cfg.providers?.custom?.[0]).toMatchObject({ context_window: 1048576, max_tokens: 384000 });
+  });
+
   it('reconciles custom providers by id across layers (reuse org + override)', () => {
     const r = resolveConfig({
       layers: {

@@ -22,6 +22,8 @@ export interface ResolvedCustomProvider {
   baseUrl: string;
   api?: string;
   apiKeyEnv?: string;
+  contextWindow?: number;
+  maxTokens?: number;
 }
 
 /** A resolved MCP server the agent can call tools from. */
@@ -285,6 +287,8 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
     baseUrl: p.base_url,
     ...(p.api ? { api: p.api } : {}),
     ...(p.api_key_env ? { apiKeyEnv: p.api_key_env } : {}),
+    ...(p.context_window ? { contextWindow: p.context_window } : {}),
+    ...(p.max_tokens ? { maxTokens: p.max_tokens } : {}),
   }));
 
   const allowedAssociations = requireDefined(
