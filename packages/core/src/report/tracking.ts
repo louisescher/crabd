@@ -1,6 +1,15 @@
 /** Hidden marker identifying a crab'd tracking comment, for sticky reuse across runs. */
 export const TRACKING_MARKER = '<!-- crabd:tracking -->';
 
+/**
+ * Hidden marker on every inline review finding crab'd posts.
+ *
+ * Without it there is no reliable way to tell crab'd's own finding from a human's inline comment
+ * when a reply thread is reconstructed: the bot's login is not knowable at runtime (it varies by
+ * install — App, broker, or PAT). See `buildReviewThread`.
+ */
+export const FINDING_MARKER = '<!-- crabd:finding -->';
+
 /** Base URL of the crab'd documentation site, for the actionable links in failure comments. */
 const DOCS_BASE = 'https://crabd.lou.gg';
 
@@ -17,19 +26,51 @@ export interface Branding {
 /** The built-in branding — crab'd's own name, emoji, and footer. */
 export const DEFAULT_BRANDING: Branding = { name: "crab'd", emoji: '🦀', footer: true };
 
+/**
+ * How crab'd presents itself, plus anything run-scoped it needs to say on every update.
+ *
+ * Every renderer takes this rather than {@link Branding} so an advisory raised before the run —
+ * "memory is on but this token cannot write" — appears on the working comment, each progress
+ * update, and the final result alike, without threading a parameter through six signatures.
+ * `Branding` is structurally assignable, so a caller with nothing to warn about passes it directly.
+ */
+export interface CommentContext extends Branding {
+  /**
+   * Run-scoped warnings, rendered below a rule above the footer. These describe a setting that
+   * cannot take effect (rather than a failure), so they are raised up front and repeated on every
+   * state — the user should not have to wait for the run to end to learn crab'd can't do something.
+   */
+  advisories?: string[];
+}
+
 /** The emoji prefix (`🦀 `) for a comment lead, or `''` when no emoji is configured. */
 function prefix(b: Branding): string {
   return b.emoji ? `${b.emoji} ` : '';
 }
 
 /**
+ * The advisory block: a rule, then each warning as a GitHub alert so it reads as a warning rather
+ * than as more body text. Empty when there is nothing to say, which is the overwhelming default.
+ */
+function advisoryBlock(b: CommentContext): string {
+  const advisories = (b.advisories ?? []).map((a) => a.trim()).filter(Boolean);
+  if (advisories.length === 0) return '';
+  const blocks = advisories
+    .map((a) => `> [!WARNING]\n${a.split('\n').map((line) => `> ${line}`.trimEnd()).join('\n')}`)
+    .join('\n\n');
+  return `\n\n---\n\n${blocks}`;
+}
+
+/**
  * The comment footer. Always ends with {@link TRACKING_MARKER} so crab'd can find and reuse
  * its own comment across runs; the visible `posted by` line (with the attribution link) is
- * omitted when `branding.footer` is false.
+ * omitted when `branding.footer` is false. Any {@link CommentContext.advisories} are rendered
+ * immediately above it, so every renderer picks them up from its single existing `footer(...)` call.
  */
-function footer(b: Branding): string {
-  if (!b.footer) return `\n${TRACKING_MARKER}`;
-  return `\n\n<sub>${prefix(b)}posted by [${b.name}](https://github.com/louisescher/crabd)</sub>\n${TRACKING_MARKER}`;
+function footer(b: CommentContext): string {
+  const advisory = advisoryBlock(b);
+  if (!b.footer) return `${advisory}\n${TRACKING_MARKER}`;
+  return `${advisory}\n\n<sub>${prefix(b)}posted by [${b.name}](https://github.com/louisescher/crabd)</sub>\n${TRACKING_MARKER}`;
 }
 
 const MODE_VERB: Record<string, string> = {
@@ -39,14 +80,14 @@ const MODE_VERB: Record<string, string> = {
 };
 
 /** The initial "in progress" tracking comment body. */
-export function renderWorking(branding: Branding, mode: string, runUrl?: string): string {
+export function renderWorking(branding: CommentContext, mode: string, runUrl?: string): string {
   const verb = MODE_VERB[mode] ?? 'working';
   const link = runUrl ? ` ([logs](${runUrl}))` : '';
   return `${prefix(branding)}**${branding.name}** is ${verb}...${link}${footer(branding)}`;
 }
 
 /** A live progress update posted mid-run by the agent's progress tool. */
-export function renderProgress(branding: Branding, mode: string, message: string): string {
+export function renderProgress(branding: CommentContext, mode: string, message: string): string {
   const verb = MODE_VERB[mode] ?? 'working';
   return `${prefix(branding)}**${branding.name}** is ${verb}...\n\n${message.trim()}${footer(branding)}`;
 }
@@ -69,7 +110,7 @@ export interface RateLimitedRender {
  * A live tracking-comment update while crab'd is waiting out / retrying a rate
  * limit or switching to a fallback model.
  */
-export function renderRateLimited(branding: Branding, render: RateLimitedRender): string {
+export function renderRateLimited(branding: CommentContext, render: RateLimitedRender): string {
   const verb = MODE_VERB[render.mode] ?? 'working';
   const provider = render.provider ? ` on \`${render.provider}\`` : '';
   const wait = render.waitSeconds && render.waitSeconds > 0 ? ` waiting ~${Math.round(render.waitSeconds)}s, then` : '';
@@ -96,7 +137,7 @@ export interface RateLimitExhaustedRender {
 }
 
 /** The tracking comment when every model in the chain was rate-limited / the wait budget ran out. */
-export function renderRateLimitExhausted(branding: Branding, render: RateLimitExhaustedRender): string {
+export function renderRateLimitExhausted(branding: CommentContext, render: RateLimitExhaustedRender): string {
   const verb = MODE_VERB[render.mode] ?? 'working';
   const last = render.lastModel ? ` (last tried \`${render.lastModel}\`)` : '';
   const plural = render.attempts === 1 ? '' : 's';
@@ -121,7 +162,7 @@ export interface ResultRender {
 }
 
 /** The final tracking comment body once the run succeeds. */
-export function renderResult(branding: Branding, render: ResultRender): string {
+export function renderResult(branding: CommentContext, render: ResultRender): string {
   const parts = [render.summary.trim()];
   if (render.prUrl) parts.push(`\n➡️ Opened pull request: ${render.prUrl}`);
   if (render.note) parts.push(`\n<sub>${render.note}</sub>`);
@@ -161,7 +202,7 @@ function detailBlock(detail: string | undefined): string {
  * happened, what to change (pointing at the specific config knob), and links the docs —
  * tailored per {@link FailureKind}. This is the single renderer behind every error crab'd posts.
  */
-export function renderFailure(branding: Branding, render: FailureRender): string {
+export function renderFailure(branding: CommentContext, render: FailureRender): string {
   const verb = MODE_VERB[render.mode] ?? 'working';
   const name = branding.name;
 
@@ -211,6 +252,6 @@ export function renderFailure(branding: Branding, render: FailureRender): string
 }
 
 /** The tracking comment body when the run fails. Thin wrapper over {@link renderFailure}. */
-export function renderError(branding: Branding, mode: string, message: string): string {
+export function renderError(branding: CommentContext, mode: string, message: string): string {
   return renderFailure(branding, { mode, kind: 'error', detail: message });
 }

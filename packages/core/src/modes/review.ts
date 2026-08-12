@@ -5,6 +5,7 @@ import * as v from 'valibot';
 import { commentableLines, snapToCommentableLine } from '../context/diff-lines.ts';
 import { foldCommentsIntoBody } from '../forge/review-body.ts';
 import type { ReviewComment } from '../forge/types.ts';
+import { FINDING_MARKER } from '../report/tracking.ts';
 import type { ModeDefinition, ValidateContext } from './registry.ts';
 import { subjectNumber } from './shared.ts';
 
@@ -128,7 +129,13 @@ function rankFindings(findings: ReviewFinding[]): ReviewFinding[] {
   );
 }
 
-/** Render a finding into the markdown body of an inline review comment. */
+/**
+ * Render a finding into the markdown body of an inline review comment.
+ *
+ * The trailing {@link FINDING_MARKER} is invisible in the rendered comment and is what lets a later
+ * run recognize its own finding at the root of a reply thread — the bot's login varies by install,
+ * so the author field cannot answer that question.
+ */
 function renderFinding(finding: ReviewFinding): string {
   const parts = [`**${finding.severity}** · \`${finding.category}\` — ${finding.shortSummary}`, '', finding.body];
   if (finding.failureScenario.trim()) parts.push('', `**Fails when:** ${finding.failureScenario}`);
@@ -136,6 +143,7 @@ function renderFinding(finding: ReviewFinding): string {
   if (finding.evidence.location.trim()) {
     parts.push('', `_Verified at \`${finding.evidence.location}\`._`);
   }
+  parts.push('', FINDING_MARKER);
   return parts.join('\n');
 }
 

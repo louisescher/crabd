@@ -29,7 +29,7 @@ const BOTH = { instructionFiles: true, skills: true };
 
 describe('loadProjectContext — instruction files', () => {
   it('returns nothing when no files exist', () => {
-    expect(loadProjectContext(dir, BOTH)).toEqual({ skills: [] });
+    expect(loadProjectContext(dir, BOTH)).toEqual({ skills: [], memories: [] });
   });
 
   it('reads AGENTS.md', () => {

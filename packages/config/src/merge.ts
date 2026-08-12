@@ -13,6 +13,7 @@ import {
   type RateLimitOnExhausted,
   type RateLimitTriggerScope,
   type ReviewDimension,
+  type MemoryWrite,
   type ThinkingLevel,
 } from './schema.ts';
 
@@ -97,6 +98,8 @@ export interface ResolvedConfig {
   webSearch: { enabled: boolean; maxResults: number };
   /** Which repo-authored context (instruction files, skills) crab'd pulls into the prompt, plus whether to send the full diff (vs. a compressed one). */
   context: { instructionFiles: boolean; skills: boolean; fullDiff: boolean };
+  /** Durable, repo-managed memory. Off by default; see `memory` in the schema. */
+  memory: { enabled: boolean; write: MemoryWrite; dir: string; maxEntries: number };
   /** Cross-repo READ access exposed to the model via a scoped token in its shell (off by default). */
   repos: { read?: 'all' | string[] };
   /** Extra sandbox environment: forwarded env-var names + managed `.npmrc` registries. */
@@ -370,6 +373,16 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
   const skillsEnabled = pickScalar('context.skills', (c) => c.context?.skills, layers, locked) ?? true;
   const fullDiff = pickScalar('context.full_diff', (c) => c.context?.full_diff, layers, locked) ?? false;
 
+  // Memory is off unless a layer turns it on, and `memory.enabled` / `memory.write` are exactly the
+  // kind of thing an org wants to pin: one decides whether repo-authored text steers the agent, the
+  // other whether the agent may write it back unreviewed.
+  const memory = {
+    enabled: pickScalar('memory.enabled', (c) => c.memory?.enabled, layers, locked) ?? false,
+    write: pickScalar('memory.write', (c) => c.memory?.write, layers, locked) ?? 'branch',
+    dir: pickScalar('memory.dir', (c) => c.memory?.dir, layers, locked) ?? '.crabd/memory',
+    maxEntries: pickScalar('memory.max_entries', (c) => c.memory?.max_entries, layers, locked) ?? 50,
+  };
+
   // Cross-repo read access + extra sandbox env are value-lists replaced by the highest
   // contributing layer (like providers.allowlist). Both are governance-lockable per exact path
   // (`repos.read`, `sandbox.env`, `sandbox.npmrc`), since they expose repos/secrets to the model.
@@ -413,6 +426,7 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
     },
     webSearch: { enabled: webSearchEnabled, maxResults: webSearchMax },
     context: { instructionFiles, skills: skillsEnabled, fullDiff },
+    memory,
     repos: { ...(reposRead !== undefined ? { read: reposRead } : {}) },
     sandbox: { env: sandboxEnv, npmrc: sandboxNpmrc },
     prompt: {

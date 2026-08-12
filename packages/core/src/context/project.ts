@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { load } from 'js-yaml';
+import { parseFrontmatter } from './frontmatter.ts';
+import { loadMemories, type MemoryEntry } from '../memory/store.ts';
 
 /** A skill discovered under a repo skills root, summarized for the prompt manifest. */
 export interface SkillSummary {
@@ -18,6 +19,8 @@ export interface ProjectContext {
   instructions?: string;
   /** Skills discovered under the repo skills roots (empty when disabled or none found). */
   skills: SkillSummary[];
+  /** Memories recorded from past corrections (empty when disabled or none recorded). */
+  memories: MemoryEntry[];
 }
 
 export interface LoadProjectContextOptions {
@@ -25,6 +28,8 @@ export interface LoadProjectContextOptions {
   instructionFiles: boolean;
   /** Discover skills under `.agents/skills/` and `.claude/skills/`. */
   skills: boolean;
+  /** Load recorded memories. Off unless `memory.enabled` is set — see the memory config. */
+  memory?: { enabled: boolean; dir: string; maxEntries: number };
 }
 
 /** Repo-root instruction files, in the order they're read and appended. */
@@ -78,18 +83,6 @@ function readInstructionFiles(cwd: string): string | undefined {
       ? distinct[0]!.content
       : distinct.map((f) => `### From \`${f.file}\`\n${f.content}`).join('\n\n');
   return truncate(body, MAX_INSTRUCTIONS_CHARS);
-}
-
-/** Parse the leading `---` YAML frontmatter block of a SKILL.md into a record. */
-function parseFrontmatter(source: string): Record<string, unknown> {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(source);
-  if (!match) return {};
-  try {
-    const doc = load(match[1]!);
-    return doc && typeof doc === 'object' && !Array.isArray(doc) ? (doc as Record<string, unknown>) : {};
-  } catch {
-    return {};
-  }
 }
 
 function isDirectory(path: string): boolean {
@@ -149,5 +142,8 @@ function discoverSkills(cwd: string): SkillSummary[] {
 export function loadProjectContext(cwd: string, options: LoadProjectContextOptions): ProjectContext {
   const instructions = options.instructionFiles ? readInstructionFiles(cwd) : undefined;
   const skills = options.skills ? discoverSkills(cwd) : [];
-  return { ...(instructions ? { instructions } : {}), skills };
+  const memories = options.memory?.enabled
+    ? loadMemories(cwd, { dir: options.memory.dir, maxEntries: options.memory.maxEntries })
+    : [];
+  return { ...(instructions ? { instructions } : {}), skills, memories };
 }

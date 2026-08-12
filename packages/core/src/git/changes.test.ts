@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { collectChanges, hasChanges } from './changes.ts';
+import { changesForPaths, collectChanges, hasChanges } from './changes.ts';
 
 let dir: string;
 
@@ -48,5 +48,28 @@ describe('collectChanges', () => {
 
   it('reports a dirty working tree', () => {
     expect(hasChanges(dir)).toBe(true);
+  });
+});
+
+describe('changesForPaths', () => {
+  it('returns only the named paths, ignoring the rest of a dirty tree', () => {
+    const changes = changesForPaths(dir, ['keep.txt']);
+    expect(changes.map((c) => c.path)).toEqual(['keep.txt']);
+    expect(changes[0]?.op).toBe('upsert');
+    // `new.txt` and the deleted `gone.txt` are both dirty, and both must stay out of it.
+    expect(collectChanges(dir).length).toBeGreaterThan(1);
+  });
+
+  it('emits a deletion for a path that no longer exists', () => {
+    expect(changesForPaths(dir, ['gone.txt'])).toEqual([{ path: 'gone.txt', op: 'delete' }]);
+  });
+
+  it('deduplicates and drops empty paths', () => {
+    expect(changesForPaths(dir, ['keep.txt', 'keep.txt', ''])).toHaveLength(1);
+  });
+
+  it('base64-encodes content so binary survives', () => {
+    const [change] = changesForPaths(dir, ['keep.txt']);
+    expect(Buffer.from(change!.contentBase64!, 'base64').toString('utf-8')).toBe('A2');
   });
 });

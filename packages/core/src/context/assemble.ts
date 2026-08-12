@@ -6,7 +6,7 @@ import type { WorkspaceState } from '../git/workspace.ts';
 import { describeCommentableLines, type AnchorableFile } from './diff-lines.ts';
 import { splitSections } from './diff-parse.ts';
 import type { ProjectContext } from './project.ts';
-import { TRACKING_MARKER } from '../report/tracking.ts';
+import { FINDING_MARKER, TRACKING_MARKER } from '../report/tracking.ts';
 import type { TriggerResult } from '../trigger/detect.ts';
 
 /** Built-in base system prompt per non-review built-in mode. Overridable via full prompt override. */
@@ -423,6 +423,8 @@ const SUBJECT_BODY_BUDGET = 6_000;
 const TRIGGER_COMMENT_BUDGET = 4_000;
 /** Per-comment char budget within the recent-comments list. */
 const COMMENT_BODY_BUDGET = 2_000;
+/** Char budget for the diff hunk an inline review thread hangs off. */
+const THREAD_HUNK_BUDGET = 2_000;
 
 /**
  * Low-signal files whose diff bodies are dropped from the compressed diff: lockfiles and
@@ -843,18 +845,67 @@ function renderContext(
       .map((c) => {
         const isCrabd = c.body.includes(TRACKING_MARKER);
         const who = isCrabd ? "crab'd (you, earlier)" : c.author;
-        const body = truncate(c.body.split(TRACKING_MARKER).join('').trim(), COMMENT_BODY_BUDGET);
+        const body = truncate(stripMarkers(c.body), COMMENT_BODY_BUDGET);
         return `**${who}:** ${body}`;
       })
       .join('\n\n');
     lines.push(`## Recent comments\n${recent}`);
   }
 
+  const thread = renderReplyThread(context.replyThread, triggerId);
+  if (thread) lines.push(thread);
+
   if (event.comment) {
     lines.push(`## Triggering comment (by ${event.comment.author})\n${truncate(event.comment.body, TRIGGER_COMMENT_BUDGET)}`);
   }
 
   return lines.join('\n\n');
+}
+
+/**
+ * The inline review conversation the triggering comment is a reply to.
+ *
+ * Without this a reply lands with no referent: the issue-level comment list never contains inline
+ * review comments, so "that's wrong, this repo does it on purpose" arrives with no "that". The
+ * triggering comment itself is left out — it is rendered in full in its own block directly below.
+ */
+function renderReplyThread(thread: ForgeContext['replyThread'], triggerId: number | undefined): string | undefined {
+  if (!thread) return undefined;
+
+  const earlier = thread.comments.filter((c) => c.id !== triggerId);
+  if (earlier.length === 0 && !thread.diffHunk) return undefined;
+
+  const where = thread.path ? `\`${thread.path}${thread.line !== undefined ? `:${thread.line}` : ''}\`` : 'this pull request';
+  const lead = thread.rootIsCrabd
+    ? `The comment below replies to a review finding **you** left on ${where}. Take the reply seriously: the human is telling you something about this codebase you got wrong or did not know.`
+    : `The comment below replies to an inline review conversation on ${where}.`;
+
+  const parts = [`## The review thread you are replying to`, lead];
+  if (thread.diffHunk) parts.push('', fence(truncate(thread.diffHunk, THREAD_HUNK_BUDGET)));
+
+  if (earlier.length > 0) {
+    const rootId = thread.comments[0]?.id;
+    const rendered = earlier
+      .map((c) => {
+        // The root's authorship is already settled by `rootIsCrabd` upstream; replies are matched on
+        // the marker. Re-deriving the root from its body here would disagree with the gate that
+        // decided this thread was crab'd's in the first place.
+        const isCrabd =
+          c.id === rootId ? thread.rootIsCrabd : c.body.includes(FINDING_MARKER) || c.body.includes(TRACKING_MARKER);
+        const who = isCrabd ? "crab'd (you, earlier)" : c.author;
+        const body = truncate(stripMarkers(c.body), COMMENT_BODY_BUDGET);
+        return `**${who}:** ${body}`;
+      })
+      .join('\n\n');
+    parts.push('', rendered);
+  }
+
+  return parts.join('\n');
+}
+
+/** Drop crab'd's hidden comment markers so they never reach the model as content. */
+function stripMarkers(body: string): string {
+  return body.split(FINDING_MARKER).join('').split(TRACKING_MARKER).join('').trim();
 }
 
 export interface AssembleOptions {
@@ -904,6 +955,26 @@ function renderProjectContext(project: ProjectContext | undefined): string[] {
       [
         '## Available skills',
         'This repository provides task-specific skills. When your current task matches one, read its `SKILL.md` with your file tools for the full instructions before proceeding. Do not use a skill whose description does not match the task.',
+        '',
+        list,
+      ].join('\n'),
+    );
+  }
+
+  // Memories are settled rulings, so they are stated as such. A model shown a list of past
+  // corrections without that framing treats them as background reading and re-raises the finding it
+  // was already told was wrong, which is the entire failure this feature exists to fix.
+  if (project.memories.length > 0) {
+    const list = project.memories
+      .map((m) => {
+        const provenance = m.source ? ` ([why](${m.source}))` : '';
+        return `### ${m.name}${provenance}\n${m.body}`;
+      })
+      .join('\n\n');
+    blocks.push(
+      [
+        '## What you have learned about this repository',
+        'Each of these was recorded after a human corrected you on a previous run. Treat them as settled rulings for this repository: do not re-raise a finding one of them rules out, and do not re-argue the decision. If a memory genuinely conflicts with what you observe in the code, say so in your answer rather than silently ignoring it.',
         '',
         list,
       ].join('\n'),

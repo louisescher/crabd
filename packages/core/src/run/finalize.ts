@@ -1,5 +1,6 @@
 import type { ResolvedConfig } from '@crabd/config';
 import type { ForgeAdapter, ForgeContext, ForgeEvent } from '../forge/types.ts';
+import { commitMemories } from '../memory/commit.ts';
 import { getMode, type FinalizeResult } from '../modes/registry.ts';
 import { renderFailure, renderResult, type FailureRender } from '../report/tracking.ts';
 import type { TriggerResult } from '../trigger/detect.ts';
@@ -18,6 +19,12 @@ export interface FinalizeInput {
   cwd: string;
   /** Optional disclosure appended to the result comment (e.g. a fallback model was used). */
   note?: string;
+  /**
+   * Memories the turn's `remember` tool recorded: the staging root they were written under, and
+   * their repo-relative paths. Staged outside the checkout so a mode committing its working-tree
+   * changes cannot sweep them up — see `CommitMemoriesInput.sourceRoot`.
+   */
+  memories?: { root: string; paths: string[] };
 }
 
 /**
@@ -41,17 +48,31 @@ export async function finalizeRun(input: FinalizeInput): Promise<FinalizeResult>
       cwd,
       ...(plan.workspace ? { workspace: plan.workspace } : {}),
     });
+
+    // After the mode, so a memory commit can never disturb the change the run was actually asked to
+    // make — and so a failure to record cannot cost the user their review.
+    const memory = await commitMemories({
+      adapter,
+      context,
+      sourceRoot: input.memories?.root ?? cwd,
+      paths: input.memories?.paths ?? [],
+      write: config.memory.write,
+      writesAllowed: config.permissions.write,
+    });
+
     await adapter.updateTrackingComment(
       plan.tracking,
       // Use the mode's short tracking text when it posted its detail elsewhere (e.g. a PR review).
       renderResult(plan.branding, {
         mode: plan.mode,
-        summary: result.trackingComment ?? result.summary,
+        summary: memory.note
+          ? `${result.trackingComment ?? result.summary}\n\n${memory.note}`
+          : (result.trackingComment ?? result.summary),
         prUrl: result.prUrl,
         ...(note ? { note } : {}),
       }),
     );
-    return result;
+    return memory.note ? { ...result, summary: `${result.summary}\n\n${memory.note}` } : result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await adapter.updateTrackingComment(

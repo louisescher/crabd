@@ -55,7 +55,7 @@ describe('assemblePrompt — project context', () => {
   });
 
   it('appends instruction files after the base prompt', () => {
-    const instructions = assemble({ instructions: 'Use tabs.', skills: [] });
+    const instructions = assemble({ instructions: 'Use tabs.', skills: [], memories: [] });
     expect(instructions).toContain('## Project instructions');
     expect(instructions).toContain('Use tabs.');
     // Base prompt stays first so crab'd's own rules outrank repo-controlled text.
@@ -65,6 +65,7 @@ describe('assemblePrompt — project context', () => {
   it('renders a skills manifest with name, description, and path', () => {
     const instructions = assemble({
       skills: [{ name: 'run-tests', description: 'Use to run the suite.', path: '.claude/skills/run-tests/SKILL.md' }],
+      memories: [],
     });
     expect(instructions).toContain('## Available skills');
     expect(instructions).toContain('**run-tests** — Use to run the suite. (`.claude/skills/run-tests/SKILL.md`)');
@@ -742,5 +743,102 @@ describe('renderContext — workspace state', () => {
     const out = messageWithWorkspace({ ...clean, status: ` M ${'z'.repeat(2_500)}` });
     expect(out).toContain('[truncated');
     expect(out).not.toContain('z'.repeat(2_100));
+  });
+});
+
+describe('assemblePrompt — recorded memories', () => {
+  it('omits the block when nothing has been recorded', () => {
+    expect(assemble({ skills: [], memories: [] })).not.toContain('What you have learned');
+  });
+
+  it('renders each memory with its body and provenance link', () => {
+    const instructions = assemble({
+      skills: [],
+      memories: [
+        {
+          name: 'no-barrel-files',
+          body: 'This repo imports by full path on purpose.',
+          source: 'https://github.com/acme/app/pull/1#discussion_r1',
+          path: '.crabd/memory/no-barrel-files.md',
+        },
+      ],
+    });
+
+    expect(instructions).toContain('## What you have learned about this repository');
+    expect(instructions).toContain('### no-barrel-files');
+    expect(instructions).toContain('This repo imports by full path on purpose.');
+    expect(instructions).toContain('([why](https://github.com/acme/app/pull/1#discussion_r1))');
+    // Framed as settled, or the model treats it as background reading and re-raises the finding.
+    expect(instructions).toContain('settled rulings');
+  });
+
+  it('renders a memory with no source', () => {
+    const instructions = assemble({
+      skills: [],
+      memories: [{ name: 'hand-written', body: 'Authored by a human.', path: '.crabd/memory/hand-written.md' }],
+    });
+    expect(instructions).toContain('### hand-written');
+    expect(instructions).not.toContain('([why]');
+  });
+});
+
+describe('assemblePrompt — reply thread', () => {
+  function withThread(thread: ForgeContext['replyThread'], commentId = 5): string {
+    return assemblePrompt({
+      mode: 'mention',
+      config,
+      context: { ...context, ...(thread ? { replyThread: thread } : {}) },
+      event: {
+        ...event,
+        comment: { id: commentId, body: 'that is deliberate', author: 'dev', createdAt: '2026-08-12T12:00:00Z' },
+      } as ForgeEvent,
+      trigger: { mode: 'mention', explicit: true },
+    }).message;
+  }
+
+  it('omits the block when the trigger is not a reply to a review comment', () => {
+    expect(withThread(undefined)).not.toContain('The review thread you are replying to');
+  });
+
+  it('renders the anchor, the hunk, and the earlier comments', () => {
+    const message = withThread({
+      path: 'src/app.ts',
+      line: 42,
+      diffHunk: '@@ -1,2 +1,2 @@\n-old\n+new',
+      rootIsCrabd: true,
+      comments: [
+        { id: 1, body: 'You should validate this input.', author: 'crabd[bot]', createdAt: '2026-08-12T11:00:00Z' },
+        { id: 5, body: 'that is deliberate', author: 'dev', createdAt: '2026-08-12T12:00:00Z' },
+      ],
+    });
+
+    expect(message).toContain('## The review thread you are replying to');
+    expect(message).toContain('`src/app.ts:42`');
+    expect(message).toContain('+new');
+    expect(message).toContain('You should validate this input.');
+    // The trigger itself is rendered in its own block directly below; don't send it twice.
+    expect(message.match(/that is deliberate/g)).toHaveLength(1);
+  });
+
+  it('tells the model the finding was its own when the thread is crab\'d-rooted', () => {
+    const message = withThread({
+      path: 'src/app.ts',
+      line: 1,
+      rootIsCrabd: true,
+      comments: [{ id: 1, body: 'a finding', author: 'crabd[bot]', createdAt: '2026-08-12T11:00:00Z' }],
+    });
+    expect(message).toContain('**you**');
+    expect(message).toContain("crab'd (you, earlier)");
+  });
+
+  it('does not claim authorship of a thread a human started', () => {
+    const message = withThread({
+      path: 'src/app.ts',
+      line: 1,
+      rootIsCrabd: false,
+      comments: [{ id: 1, body: 'why is this here?', author: 'other', createdAt: '2026-08-12T11:00:00Z' }],
+    });
+    expect(message).toContain('## The review thread you are replying to');
+    expect(message).not.toContain('**you**');
   });
 });

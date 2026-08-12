@@ -60,3 +60,22 @@ export function collectChanges(cwd: string): FileChange[] {
 export function hasChanges(cwd: string): boolean {
   return git(['status', '--porcelain=v1'], cwd).trim().length > 0;
 }
+
+/**
+ * Commit operations for exactly the named paths, ignoring everything else in the working tree.
+ *
+ * {@link collectChanges} sweeps the whole tree, which is right for a mode committing the change it
+ * was asked to make and wrong for a side-effect write: a review run that records a memory must not
+ * also commit whatever the agent happened to leave on disk while investigating. Paths that don't
+ * exist are emitted as deletions, so removing a memory is expressible through the same path.
+ */
+export function changesForPaths(cwd: string, paths: string[]): FileChange[] {
+  const unique = [...new Set(paths)].filter(Boolean);
+  return unique.map((path) => {
+    try {
+      return { path, op: 'upsert' as const, contentBase64: readAsBase64(cwd, path) };
+    } catch {
+      return { path, op: 'delete' as const };
+    }
+  });
+}

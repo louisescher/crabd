@@ -21,6 +21,7 @@ default. For how these values combine across the org repo, the repo file, CI inp
 | `review` | `object` | — | Review-mode behavior. See below. |
 | `web_search` | `object` | — | Web research tools for the agent. See below. |
 | `context` | `object` | — | Repo-authored context (`AGENTS.md`/`CLAUDE.md`, skills) crab'd pulls into the prompt. See below. |
+| `memory` | `object` | — | Durable, repo-managed memory recorded from corrections. **Off by default.** See below. |
 | `repos` | `object` | — | Cross-repo **read** access for the agent. See below. |
 | `sandbox` | `object` | — | Extra environment for the model's shell: forwarded secrets + private-registry `.npmrc`. See below. |
 | `prompt` | `object` | — | Prompt customization. See below. |
@@ -254,6 +255,39 @@ full behavior.
 | `instruction_files` | `boolean` | `true` | Load `AGENTS.md`, then `CLAUDE.md`, from the checkout root and append them to the system prompt (after crab'd's base + `prompt.instructions`, so core rules stay authoritative). Both are read; identical content is included once, differing content is labeled per file. Combined text is capped at 40k chars. |
 | `skills` | `boolean` | `true` | Discover skills under `.agents/skills/` and `.claude/skills/` and list each skill's `name` + `description` in the prompt. The agent reads a skill's `SKILL.md` itself when a task matches — the body is never preloaded. A skill with no description is skipped; a skill in both roots is listed once. |
 | `full_diff` | `boolean` | `false` | Embed the entire PR diff in the prompt. Off by default: crab'd sends a **compressed** diff instead — low-signal files (lockfiles, generated/minified/vendored output) are dropped, oversized files are clipped to the hunks that fit, and everything omitted is listed so the agent can read a file directly if it needs to. This keeps prompts small and cuts the exploration turns the agent would otherwise spend. Turn it on to send the full diff (clipped only at a 60k-char ceiling). |
+
+## `memory`
+
+Markdown files under `memory.dir` that crab'd reads into every prompt and, when a human corrects
+one of its comments, writes back to. **Off by default**, because a memory file is standing
+instruction to the agent. See [Memory](/memory/) for the file format and the full behavior.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `enabled` | `boolean` | `false` | Master switch. While off, no memories are loaded and crab'd is never given the tool to record one, so behavior is identical to not having the feature. |
+| `write` | `'branch' \| 'pr' \| 'main' \| 'off'` | `branch` | Where a recorded memory lands. See the table below. Only meaningful once `enabled` is `true`. |
+| `dir` | `string` | `.crabd/memory` | Directory holding the memory files, relative to the repository root. |
+| `max_entries` | `number` | `50` | Cap on memories loaded into a prompt, newest first. A 20k-character total budget applies after this. |
+
+Write targets:
+
+| Value | Behavior |
+| --- | --- |
+| `branch` | Commits to the pull request's own branch, so the memory is reviewed with the code that provoked it. Falls back to `pr` when there is no pull request, and is skipped (with a warning) on a fork, since crab'd cannot push to one. |
+| `pr` | Commits to a `crabd/memory` branch and opens a dedicated pull request. Works for fork triggers too. |
+| `main` | Commits straight to the default branch. Takes effect on the next run anywhere in the repo, **with no review in between**, so any comment from an allowed association becomes standing instruction. |
+| `off` | Read-only: you author the files, crab'd only reads them. |
+
+Recording additionally requires `permissions.write` and a token that can write to the repository.
+When memory is on but any of that is missing, crab'd warns on its tracking comment at the *start* of
+the run and does not attempt the write.
+
+```yaml
+# Read hand-written memories, never record anything.
+memory:
+  enabled: true
+  write: off
+```
 
 ## `repos`
 

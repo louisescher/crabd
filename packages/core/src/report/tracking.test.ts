@@ -123,3 +123,55 @@ describe('DEFAULT_BRANDING', () => {
     expect(renderWorking(DEFAULT_BRANDING, 'mention')).toContain("🦀 posted by [crab'd]");
   });
 });
+
+describe('advisories', () => {
+  const withAdvisory = { ...DEFAULT_BRANDING, advisories: ['Memory is on but this token cannot write.'] };
+
+  it('renders below a rule, above the footer', () => {
+    const body = renderWorking(withAdvisory, 'review');
+    const rule = body.indexOf('\n---\n');
+    expect(rule).toBeGreaterThan(-1);
+    expect(body).toContain('> [!WARNING]\n> Memory is on but this token cannot write.');
+    // The footer must stay last so the tracking marker still terminates the comment.
+    expect(rule).toBeLessThan(body.indexOf('posted by'));
+    expect(body.trimEnd().endsWith(TRACKING_MARKER)).toBe(true);
+  });
+
+  it('appears on every state of the comment, not just the last', () => {
+    for (const body of [
+      renderWorking(withAdvisory, 'review'),
+      renderProgress(withAdvisory, 'review', 'reading files'),
+      renderResult(withAdvisory, { mode: 'review', summary: 'done' }),
+      renderFailure(withAdvisory, { mode: 'review', kind: 'error' }),
+    ]) {
+      expect(body).toContain('[!WARNING]');
+    }
+  });
+
+  it('renders each advisory as its own alert', () => {
+    const body = renderResult({ ...DEFAULT_BRANDING, advisories: ['One.', 'Two.'] }, { mode: 'review', summary: 's' });
+    expect(body.match(/\[!WARNING\]/g)).toHaveLength(2);
+  });
+
+  it('quotes every line of a multi-line advisory', () => {
+    const body = renderWorking({ ...DEFAULT_BRANDING, advisories: ['First line.\nSecond line.'] }, 'review');
+    expect(body).toContain('> First line.\n> Second line.');
+  });
+
+  it('adds nothing when there are none — the overwhelming default', () => {
+    const plain = renderWorking(DEFAULT_BRANDING, 'review');
+    expect(plain).not.toContain('[!WARNING]');
+    expect(plain).toBe(renderWorking({ ...DEFAULT_BRANDING, advisories: [] }, 'review'));
+  });
+
+  it('ignores blank advisories rather than rendering an empty alert', () => {
+    expect(renderWorking({ ...DEFAULT_BRANDING, advisories: ['  '] }, 'review')).not.toContain('[!WARNING]');
+  });
+
+  it('keeps the marker when the visible footer is off', () => {
+    const body = renderWorking({ ...withAdvisory, footer: false }, 'review');
+    expect(body).toContain('[!WARNING]');
+    expect(body).not.toContain('posted by');
+    expect(body.trimEnd().endsWith(TRACKING_MARKER)).toBe(true);
+  });
+});

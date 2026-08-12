@@ -29,7 +29,13 @@ import { CrabdTurn } from './agents/crabd-turn.ts';
 import { loadResolvedConfig } from './config-loader.ts';
 import { buildForge, detectForge } from './forge-factory.ts';
 import { buildProviders, unsizedCustomModels } from './providers.ts';
-import { buildRunContext, runContext, setRunContext, type ProgressTarget } from './run-context.ts';
+import {
+  buildRunContext,
+  recordedMemories,
+  runContext,
+  setRunContext,
+  type ProgressTarget,
+} from './run-context.ts';
 import { runTurn } from './turn-runner.ts';
 import {
   forgeHost,
@@ -239,16 +245,34 @@ async function main(): Promise<number> {
   const { config, extensionPath } = await loadResolvedConfig({ adapter, event, cwd });
   await registerExtensionModes(extensionPath, cwd);
 
+  // Warnings raised before the run that belong on the tracking comment rather than only in the log:
+  // a setting the user turned on that cannot take effect here. Threaded through prepareRun so they
+  // appear from the very first "working..." update instead of at the end.
+  const advisories: string[] = [];
+
   // A token that cannot write makes every write path a 403 at the end of the run, after the model
   // has already done the work. Ask the token what it can do and turn writes off up front, so the
   // agent is told before it starts and answers instead of committing.
-  if (config.permissions.write) {
+  //
+  // Memory recording needs the same answer, so the introspection runs when either is on.
+  const memoryWants = config.memory.enabled && config.memory.write !== 'off';
+  if (config.permissions.write || memoryWants) {
     try {
       const granted = await auth.tokenPermissions?.();
+      // `undefined` means the strategy cannot know (a PAT or workflow token carries no
+      // introspectable scope) — never that access is missing. Treating unknown as "no access" would
+      // put a false "crab'd can't write here" on every PAT install. See AuthProvider.tokenPermissions.
       if (granted && granted.contents !== 'write') {
-        warn(
-          `the ${forge === 'github' ? 'GitHub App installation' : 'token'} for this repository grants \`contents: ${granted.contents ?? 'none'}\`, so crab'd cannot commit here and is running read-only. Grant contents write access (and accept the permission request on the installation) to let it commit.`,
-        );
+        if (config.permissions.write) {
+          warn(
+            `the ${forge === 'github' ? 'GitHub App installation' : 'token'} for this repository grants \`contents: ${granted.contents ?? 'none'}\`, so crab'd cannot commit here and is running read-only. Grant contents write access (and accept the permission request on the installation) to let it commit.`,
+          );
+        }
+        if (memoryWants) {
+          advisories.push(
+            `Memory recording is on, but crab'd's ${forge === 'github' ? 'GitHub App installation' : 'token'} grants \`contents: ${granted.contents ?? 'none'}\` for this repository, so nothing will be recorded. Grant contents write access, or set \`memory.write: off\`.`,
+          );
+        }
         config.permissions.write = false;
       }
     } catch (error) {
@@ -275,7 +299,14 @@ async function main(): Promise<number> {
   classifyModel = config.model;
   runtime = await startRuntime(config);
 
-  const outcome = await prepareRun({ adapter, config, event, cwd, classify: async (req) => runCrabdClassify(req) });
+  const outcome = await prepareRun({
+    adapter,
+    config,
+    event,
+    cwd,
+    advisories,
+    classify: async (req) => runCrabdClassify(req),
+  });
   if (outcome.status === 'skip') {
     log(`skip: ${outcome.reason}`);
     return 0;
@@ -445,6 +476,9 @@ async function main(): Promise<number> {
       repoSlug: event.repo.slug,
       ...(diffPath ? { diffPath } : {}),
       ...(progress ? { progress } : {}),
+      memory: plan.memory,
+      today: new Date().toISOString().slice(0, 10),
+      branding: plan.branding,
     }),
   );
 
@@ -519,7 +553,18 @@ async function main(): Promise<number> {
   }
   const note = notes.length > 0 ? notes.join(' ') : undefined;
 
-  const result = await finalizeRun({ adapter, config, event, context, trigger, plan, data, cwd, ...(note ? { note } : {}) });
+  const result = await finalizeRun({
+    adapter,
+    config,
+    event,
+    context,
+    trigger,
+    plan,
+    data,
+    cwd,
+    memories: recordedMemories(),
+    ...(note ? { note } : {}),
+  });
 
   setOutput('mode', plan.mode);
   setOutput('result', JSON.stringify(data));

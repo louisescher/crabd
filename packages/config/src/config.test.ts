@@ -640,3 +640,42 @@ describe('providerOf', () => {
     expect(providerOf('bare')).toBe('bare');
   });
 });
+
+describe('resolveConfig — memory', () => {
+  it('is off by default, so upgrading changes nothing', () => {
+    const cfg = resolveConfig({ layers: {} });
+    expect(cfg.memory.enabled).toBe(false);
+    expect(cfg.memory.dir).toBe('.crabd/memory');
+    expect(cfg.memory.maxEntries).toBe(50);
+    // The write target is resolved even while disabled, so turning `enabled` on needs one line.
+    expect(cfg.memory.write).toBe('branch');
+  });
+
+  it('accepts every write target', () => {
+    for (const write of ['branch', 'pr', 'main', 'off'] as const) {
+      expect(resolveConfig({ layers: { repo: { memory: { write } } } }).memory.write).toBe(write);
+    }
+  });
+
+  it('rejects an unknown write target at parse time', () => {
+    expect(() => parseConfigObject({ memory: { write: 'wherever' } })).toThrow();
+  });
+
+  it('lets a repo turn memory on and point it elsewhere', () => {
+    const cfg = resolveConfig({
+      layers: { repo: { memory: { enabled: true, dir: 'docs/memory', max_entries: 5 } } },
+    });
+    expect(cfg.memory).toMatchObject({ enabled: true, dir: 'docs/memory', maxEntries: 5 });
+  });
+
+  it('lets an org lock memory settings against the repo', () => {
+    const cfg = resolveConfig({
+      layers: {
+        org: { governance: { locked: ['memory.enabled', 'memory.write'] }, memory: { enabled: false, write: 'pr' } },
+        repo: { memory: { enabled: true, write: 'main' } },
+      },
+    });
+    expect(cfg.memory.enabled).toBe(false);
+    expect(cfg.memory.write).toBe('pr');
+  });
+});

@@ -2,6 +2,7 @@ import { Octokit } from '@octokit/rest';
 import type { AuthProvider } from '../auth/types.ts';
 import { TRACKING_MARKER } from '../report/tracking.ts';
 import { foldCommentsIntoBody } from './review-body.ts';
+import { buildReviewThread } from './review-thread.ts';
 import type {
   CommitRequest,
   ForgeActor,
@@ -123,6 +124,22 @@ export class GitHubForge implements ForgeAdapter {
       const diff = await gh.pulls.get({ ...base, pull_number: prNumber, mediaType: { format: 'diff' } });
       // With the diff media type, `data` is the raw unified diff string.
       context.diff = diff.data as unknown as string;
+
+      // A reply to an inline finding fires `pull_request_review_comment`, and the comment it answers
+      // is not in `listComments` above — that's the issue-level timeline. Fetch the review comments
+      // so the model can see what it is being corrected about.
+      if (event.kind === 'pull_request_review_comment' && event.comment) {
+        try {
+          const { data: reviewComments } = await gh.pulls.listReviewComments({
+            ...base,
+            pull_number: prNumber,
+            per_page: 100,
+          });
+          context.replyThread = buildReviewThread(reviewComments, event.comment.id);
+        } catch {
+          // Best-effort: the reply itself still reaches the prompt without its thread.
+        }
+      }
     }
 
     return context;

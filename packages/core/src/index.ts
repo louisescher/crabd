@@ -2,6 +2,7 @@
 export * from './forge/types.ts';
 export { GitHubForge, type GitHubForgeOptions } from './forge/github.ts';
 export { ForgejoForge, type ForgejoForgeOptions } from './forge/forgejo.ts';
+export { buildReviewThread, type RawReviewComment, type ReviewThread } from './forge/review-thread.ts';
 
 // Auth
 export { StaticTokenAuth, type AuthProvider } from './auth/types.ts';
@@ -54,6 +55,31 @@ export {
   type ProjectContext,
   type SkillSummary,
 } from './context/project.ts';
+export {
+  frontmatterString,
+  parseFrontmatter,
+  splitFrontmatter,
+  type Frontmatter,
+} from './context/frontmatter.ts';
+
+// Memory
+export {
+  DEFAULT_MEMORY_DIR,
+  loadMemories,
+  memorySlug,
+  writeMemory,
+  type LoadMemoriesOptions,
+  type MemoryEntry,
+  type WriteMemoryInput,
+} from './memory/store.ts';
+export {
+  commitMemories,
+  resolveMemoryTarget,
+  type CommitMemoriesInput,
+  type CommitMemoriesResult,
+  type MemoryTarget,
+} from './memory/commit.ts';
+export { isCorrectionReply } from './memory/gate.ts';
 
 // Policy
 export { authorizeActor, type AuthorizationResult } from './policy/trust.ts';
@@ -119,7 +145,9 @@ export {
   renderResult,
   renderWorking,
   TRACKING_MARKER,
+  FINDING_MARKER,
   type Branding,
+  type CommentContext,
   type FailureKind,
   type FailureRender,
   type RateLimitedRender,
@@ -135,6 +163,7 @@ export {
   type ClassifyRequest,
   type PrepareInput,
   type PrepareOutcome,
+  type RunMemory,
   type RunPlan,
 } from './run/prepare.ts';
 export { finalizeRun, reportRunError, type FinalizeInput } from './run/finalize.ts';

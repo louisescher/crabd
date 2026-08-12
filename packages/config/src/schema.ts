@@ -153,6 +153,39 @@ export const ContextPartialSchema = v.object({
 });
 export type ContextPartial = v.InferOutput<typeof ContextPartialSchema>;
 
+/** Where a memory crab'd records is written. */
+export const MEMORY_WRITE_TARGETS = ['branch', 'pr', 'main', 'off'] as const;
+export const MemoryWriteSchema = v.picklist(MEMORY_WRITE_TARGETS);
+export type MemoryWrite = v.InferOutput<typeof MemoryWriteSchema>;
+
+/**
+ * Durable, repo-managed memory: markdown files under `memory.dir` that crab'd reads into every
+ * prompt, and (when `write` allows) records into after a human corrects one of its comments.
+ *
+ * Off by default. A memory file is standing instruction to the agent, so it should appear because
+ * someone asked for it, never because they upgraded.
+ */
+export const MemoryPartialSchema = v.object({
+  /** Master switch. When false nothing is loaded and crab'd is never given the tool to record. */
+  enabled: v.optional(v.boolean()),
+  /**
+   * Where a recorded memory lands:
+   * - `branch` — the pull request's own branch, so the memory is reviewed with the code that
+   *   provoked it. Falls back to `pr` when there is no pull request, and is skipped on a fork
+   *   (crab'd cannot push there).
+   * - `pr` — a dedicated `crabd/memory` branch and pull request, approved on its own.
+   * - `main` — committed straight to the default branch. Takes effect immediately and everywhere,
+   *   with no review in between.
+   * - `off` — read-only: humans author the files, crab'd only reads them.
+   */
+  write: v.optional(MemoryWriteSchema),
+  /** Directory holding the memory files, relative to the repository root. */
+  dir: v.optional(v.string()),
+  /** Cap on how many memories are loaded into a prompt, newest first. */
+  max_entries: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0))),
+});
+export type MemoryPartial = v.InferOutput<typeof MemoryPartialSchema>;
+
 export const ReposPartialSchema = v.object({
   /**
    * Repositories (besides the trigger repo) the agent may **read** during a run. `'all'` grants
@@ -418,6 +451,7 @@ export const CrabdConfigPartialSchema = v.object({
   review: v.optional(ReviewPartialSchema),
   web_search: v.optional(WebSearchPartialSchema),
   context: v.optional(ContextPartialSchema),
+  memory: v.optional(MemoryPartialSchema),
   repos: v.optional(ReposPartialSchema),
   sandbox: v.optional(SandboxPartialSchema),
   prompt: v.optional(PromptPartialSchema),
@@ -477,6 +511,14 @@ export const DEFAULT_CONFIG: CrabdConfigPartial = {
     // Off by default: send a compressed diff, not the whole thing — fewer tokens, fewer
     // exploration turns. Opt in for the full diff.
     full_diff: false,
+  },
+  memory: {
+    // Off by default: a memory file becomes standing instruction to the agent, so it should never
+    // appear because someone upgraded. `write` only matters once `enabled` is turned on.
+    enabled: false,
+    write: 'branch',
+    dir: '.crabd/memory',
+    max_entries: 50,
   },
   // Off by default: no cross-repo access, no forwarded secrets. Both are opt-in and
   // governance-lockable, since they put credentials / other repos in front of the model.

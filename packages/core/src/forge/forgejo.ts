@@ -1,6 +1,7 @@
 import type { AuthProvider } from '../auth/types.ts';
 import { TRACKING_MARKER } from '../report/tracking.ts';
 import { foldCommentsIntoBody } from './review-body.ts';
+import { buildReviewThread, type RawReviewComment } from './review-thread.ts';
 import type {
   CommitRequest,
   ForgeActor,
@@ -22,6 +23,9 @@ export interface ForgejoForgeOptions {
   /** Forgejo API root, e.g. `https://forgejo.example.com/api/v1`. */
   baseUrl: string;
 }
+
+/** How many of a pull request's most recent reviews to pull inline comments from. */
+const REVIEW_FETCH_LIMIT = 20;
 
 function permissionToAssociation(permission: string): string {
   switch (permission) {
@@ -127,9 +131,44 @@ export class ForgejoForge implements ForgeAdapter {
         path: f.filename, status: f.status, additions: f.additions, deletions: f.deletions,
       }));
       context.diff = await this.raw(`${this.prefix}/pulls/${prNumber}.diff`);
+
+      if (event.kind === 'pull_request_review_comment' && event.comment) {
+        const comments = await this.reviewComments(prNumber);
+        if (comments.length > 0) {
+          context.replyThread = buildReviewThread(comments, event.comment.id);
+        }
+      }
     }
 
     return context;
+  }
+
+  /**
+   * Every inline review comment on a pull request.
+   *
+   * Forgejo has no flat "list all review comments" endpoint — comments hang off their review — so
+   * this fans out over the reviews. Bounded to the most recent {@link REVIEW_FETCH_LIMIT} because
+   * a long-lived pull request can accumulate a lot of them and this runs on every reply.
+   *
+   * Entirely best-effort: a failure here costs the model the thread around the comment it is
+   * answering, not the run.
+   */
+  private async reviewComments(prNumber: number): Promise<RawReviewComment[]> {
+    try {
+      const { data: reviews } = await this.api<{ id: number }[]>('GET', `${this.prefix}/pulls/${prNumber}/reviews`);
+      const recent = (reviews ?? []).slice(-REVIEW_FETCH_LIMIT);
+      const collected: RawReviewComment[] = [];
+      for (const review of recent) {
+        const { data } = await this.api<RawReviewComment[]>(
+          'GET',
+          `${this.prefix}/pulls/${prNumber}/reviews/${review.id}/comments`,
+        );
+        if (data) collected.push(...data);
+      }
+      return collected;
+    } catch {
+      return [];
+    }
   }
 
   async resolveActor(login: string): Promise<ForgeActor> {

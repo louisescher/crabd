@@ -1,13 +1,15 @@
-import type { ResolvedConfig, ThinkingLevel } from '@crabd/config';
+import type { MemoryWrite, ResolvedConfig, ThinkingLevel } from '@crabd/config';
 import { assemblePrompt } from '../context/assemble.ts';
 import { loadProjectContext } from '../context/project.ts';
 import type { ForgeAdapter, ForgeContext, ForgeEvent, TrackingComment } from '../forge/types.ts';
 import { checkoutPrHead, resolveWorkspace, type WorkspaceState } from '../git/workspace.ts';
+import { resolveMemoryTarget } from '../memory/commit.ts';
+import { isCorrectionReply } from '../memory/gate.ts';
 import { getMode, listModes } from '../modes/registry.ts';
 import { subjectNumber } from '../modes/shared.ts';
 import { assertProvidersAllowed } from '../policy/providers.ts';
 import { authorizeActor } from '../policy/trust.ts';
-import { renderWorking, type Branding } from '../report/tracking.ts';
+import { renderWorking, type CommentContext } from '../report/tracking.ts';
 import { detectTrigger, type TriggerResult } from '../trigger/detect.ts';
 
 /** Forge tools that change the repository, dropped from a mode's toolset when writes are off. */
@@ -28,14 +30,33 @@ export interface RunPlan {
   tracking: TrackingComment;
   /** Issue/PR number the run concerns. */
   subject: number;
-  /** Name/emoji/footer crab'd uses in comments for this run (from `config.appearance`). */
-  branding: Branding;
+  /**
+   * Name/emoji/footer crab'd uses in comments for this run, plus any run-scoped advisories.
+   * Passing this (rather than `config.appearance`) to a renderer is what puts a warning on every
+   * state of the tracking comment.
+   */
+  branding: CommentContext;
+  /** Whether, where, and from which directory this run may record a memory. */
+  memory: RunMemory;
   /**
    * Resolved VCS state of the checkout, after any attempt to move it onto the PR head.
    * `matchesPrHead === false` means the agent is reading files that are not the change under
    * review — surfaced in the prompt, and worth logging by the caller.
    */
   workspace?: WorkspaceState;
+}
+
+/** What the turn is allowed to do about memory, decided before the model starts. */
+export interface RunMemory {
+  /** Memory directory, relative to the checkout root. */
+  dir: string;
+  /**
+   * Whether the `remember` tool is mounted at all. False whenever the memory could not be written
+   * — writes off, an unwritable token, a fork — so the agent never attempts a write it cannot make.
+   */
+  writable: boolean;
+  /** Where a recorded memory would go. */
+  write: MemoryWrite;
 }
 
 export type PrepareOutcome =
@@ -84,6 +105,56 @@ export interface PrepareInput {
    * comment. Best-effort: skipped for explicit keywords/events and on any classifier error.
    */
   classify?: ClassifyFn;
+  /**
+   * Warnings the caller already established before the run — typically that crab'd's token cannot
+   * write, which only the CLI can ask the auth strategy about. `prepareRun` appends the ones it can
+   * only see after fetching context (a fork), and every renderer picks the combined set up from
+   * `plan.branding`.
+   */
+  advisories?: string[];
+}
+
+/**
+ * Decide whether this run may record a memory, and warn when the setting cannot take effect.
+ *
+ * Every "no" here also produces an advisory, because the failure mode this exists to prevent is a
+ * user turning memory on and never learning why nothing is ever recorded. The reverse is just as
+ * important: when memory is off — the default — nothing is checked and nothing is said.
+ *
+ * The gate deliberately runs before the model does. Discovering that crab'd cannot write *after* it
+ * has spent a turn composing a memory wastes the turn and surfaces as an error rather than an
+ * explanation.
+ */
+function resolveRunMemory(
+  config: ResolvedConfig,
+  context: ForgeContext,
+  event: ForgeEvent,
+  inherited: string[],
+): { memory: RunMemory; advisories: string[] } {
+  const { enabled, write, dir } = config.memory;
+  const advisories = [...inherited];
+  const off = { dir, writable: false, write };
+
+  if (!enabled || write === 'off') return { memory: off, advisories };
+
+  if (!config.permissions.write) {
+    advisories.push(
+      'Memory recording is on, but writes are disabled for this repository, so nothing will be recorded. Set `permissions.write: true`, or `memory.write: off` to stop crab\'d from trying.',
+    );
+    return { memory: off, advisories };
+  }
+
+  const target = resolveMemoryTarget(write, context);
+  if (target.kind === 'skip') {
+    advisories.push(`Memory recording is on, but ${target.reason}.`);
+    return { memory: off, advisories };
+  }
+
+  // Nothing is wrong — the tool simply isn't relevant unless this run is a reply to crab'd. Silent
+  // by design: "no correction to record" is the normal case and is not worth a warning.
+  if (!isCorrectionReply(context, event)) return { memory: off, advisories };
+
+  return { memory: { dir, writable: true, write }, advisories };
 }
 
 /**
@@ -201,6 +272,11 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
   const project = loadProjectContext(cwd, {
     instructionFiles: config.context.instructionFiles,
     skills: config.context.skills,
+    memory: {
+      enabled: config.memory.enabled,
+      dir: config.memory.dir,
+      maxEntries: config.memory.maxEntries,
+    },
   });
 
   const prompt = assemblePrompt({
@@ -213,7 +289,9 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
     workspace,
     cwd,
   });
-  const branding = config.appearance;
+
+  const { memory, advisories } = resolveRunMemory(config, context, event, input.advisories ?? []);
+  const branding: CommentContext = { ...config.appearance, ...(advisories.length > 0 ? { advisories } : {}) };
 
   // Reuse an existing crab'd comment on this subject (sticky) instead of stacking new ones.
   let tracking = await adapter.findTrackingComment(subject);
@@ -235,6 +313,7 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
       tracking,
       subject,
       branding,
+      memory,
       workspace,
     },
     context,

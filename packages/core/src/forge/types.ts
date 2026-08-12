@@ -4,6 +4,10 @@
  * modes) never depends on a specific forge.
  */
 
+import type { ReviewThread } from './review-thread.ts';
+
+export type { ReviewThread };
+
 export type ForgeKind = 'github' | 'forgejo';
 
 /** Reaction contents supported by both GitHub and Forgejo/Gitea. */
@@ -100,6 +104,12 @@ export interface ForgeContext {
   /** Unified diff for a PR, when applicable. */
   diff?: string;
   changedFiles: ForgeChangedFile[];
+  /**
+   * The inline review conversation the triggering comment belongs to, when the trigger was a reply
+   * to one. Without it a reply arrives with no referent: `comments` above is the issue-level
+   * timeline, which never contains inline review comments.
+   */
+  replyThread?: ReviewThread;
 }
 
 /** Handle to a posted tracking comment so it can be updated in place. */

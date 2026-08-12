@@ -2,7 +2,7 @@ import { defineTool, useDataWriter, useInitialData, useMcpConnection, useModel, 
 import { local } from '@flue/runtime/node';
 import * as v from 'valibot';
 import { getMode } from '@crabd/core';
-import { configuredWebSearchTools, mcpConnections, progressTool, runContext } from '../run-context.ts';
+import { configuredWebSearchTools, mcpConnections, progressTool, rememberTool, runContext } from '../run-context.ts';
 
 /**
  * Per-instance facts, recorded at creation. These used to travel as `CRABD_*` env vars because the
@@ -38,6 +38,10 @@ export function CrabdTurn() {
 
   const progress = progressTool(creation?.mode ?? 'mention');
   if (progress) useTool(progress);
+  // Absent unless this run is a reply to crab'd in a repo it can actually commit to, so the model is
+  // never offered a way to record something that would then fail to land.
+  const remember = rememberTool();
+  if (remember) useTool(remember);
   for (const tool of configuredWebSearchTools()) useTool(tool);
 
   // The mode owns the answer's shape. Without a resolved mode there is nothing to validate against,
