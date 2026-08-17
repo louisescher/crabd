@@ -53,7 +53,7 @@ outputs:
 
 runs:
   using: docker
-  image: docker://ghcr.io/louisescher/crabd:v0
+  image: docker://ghcr.io/louisescher/crabd:v1
   env:
     CRABD_INPUT_MODEL: ${{ inputs.model }}
     CRABD_INPUT_TRIGGER_PHRASE: ${{ inputs.trigger-phrase }}
