@@ -1,5 +1,13 @@
 # @crabd/action
 
+## 1.0.2
+
+### Patch Changes
+
+- Updated dependencies [bf99790]
+  - @crabd/core@1.0.2
+  - @crabd/config@1.0.2
+
 ## 1.0.1
 
 ### Patch Changes
