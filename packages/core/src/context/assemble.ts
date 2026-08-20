@@ -463,6 +463,20 @@ function fence(body: string): string {
   return `\`\`\`diff\n${body}\n\`\`\``;
 }
 
+const PATH_LIST_LIMIT = 200;
+
+function limitLines(entries: string[]): string {
+  if (entries.length <= PATH_LIST_LIMIT) return entries.join('\n');
+  const rest = entries.length - PATH_LIST_LIMIT;
+  return [...entries.slice(0, PATH_LIST_LIMIT), `- ... and ${rest} more`].join('\n');
+}
+
+function limitInline(paths: string[]): string {
+  const shown = paths.slice(0, PATH_LIST_LIMIT).map((p) => `\`${p}\``).join(', ');
+  const rest = paths.length - PATH_LIST_LIMIT;
+  return rest > 0 ? `${shown} and ${rest} more` : shown;
+}
+
 /**
  * Keep the whole `@@` hunks of a section that fit under `cap`.
  *
@@ -549,13 +563,13 @@ export function compressDiff(diff: string, changedFiles: ForgeChangedFile[]): st
   const body = fence(included.join('\n'));
   if (notes.length === 0) return body;
 
-  const list = notes
-    .map(({ path, reason }) => {
+  const list = limitLines(
+    notes.map(({ path, reason }) => {
       const f = byPath.get(path);
       const churn = f ? `, +${f.additions}/-${f.deletions}` : '';
       return `- \`${path}\` — ${reason}${churn}`;
-    })
-    .join('\n');
+    }),
+  );
   return [
     body,
     '',
@@ -770,7 +784,7 @@ export function renderFileContents(
   if (blocks.length === 0) return '';
 
   const note = skipped.length > 0
-    ? `\n\n_Not included here (budget): ${skipped.map((p) => `\`${p}\``).join(', ')}. Read them with your file tools._`
+    ? `\n\n_Not included here (budget): ${limitInline(skipped)}. Read them with your file tools._`
     : '';
   return [
     '## Changed files at HEAD (line-numbered)',
@@ -809,9 +823,9 @@ function renderContext(
   }
 
   if (context.changedFiles.length > 0) {
-    const files = context.changedFiles
-      .map((f) => `- ${f.status} \`${f.path}\` (+${f.additions}/-${f.deletions})`)
-      .join('\n');
+    const files = limitLines(
+      context.changedFiles.map((f) => `- ${f.status} \`${f.path}\` (+${f.additions}/-${f.deletions})`),
+    );
     lines.push(`## Changed files (${context.changedFiles.length})\n${files}`);
   }
 

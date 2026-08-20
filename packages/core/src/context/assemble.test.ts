@@ -842,3 +842,26 @@ describe('assemblePrompt — reply thread', () => {
     expect(message).not.toContain('**you**');
   });
 });
+
+describe('assemblePrompt: huge PRs', () => {
+  it('caps the changed-files list and says how many it left out', () => {
+    const changedFiles: ForgeChangedFile[] = Array.from({ length: 640 }, (_, i) => ({
+      path: `src/file-${i}.ts`,
+      status: 'modified',
+      additions: 1,
+      deletions: 1,
+    }));
+    const message = assemblePrompt({
+      mode: 'mention',
+      config,
+      context: { ...context, changedFiles },
+      event,
+      trigger: { mode: 'mention', explicit: true },
+    }).message;
+
+    expect(message).toContain('## Changed files (640)');
+    expect(message).toContain('`src/file-0.ts`');
+    expect(message).toContain('... and 440 more');
+    expect(message).not.toContain('`src/file-639.ts`');
+  });
+});

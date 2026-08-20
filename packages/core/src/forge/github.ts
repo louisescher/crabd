@@ -3,6 +3,7 @@ import type { AuthProvider } from '../auth/types.ts';
 import { TRACKING_MARKER } from '../report/tracking.ts';
 import { foldCommentsIntoBody } from './review-body.ts';
 import { buildReviewThread } from './review-thread.ts';
+import { buildDiffFromFiles, type PullFilePatch } from './synth-diff.ts';
 import type {
   CommitRequest,
   ForgeActor,
@@ -28,6 +29,16 @@ export interface GitHubForgeOptions {
 function isUnprocessableEntity(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { status?: number }).status === 422;
 }
+
+function isDiffTooLarge(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const { status, message } = err as { status?: number; message?: string };
+  return status === 406 || (message ?? '').includes('too_large');
+}
+
+const MAX_CHANGED_FILES = 1_000;
+
+type PullFile = PullFilePatch & { additions: number; deletions: number };
 
 /** Best-effort mapping from a repo permission level to an author-association proxy. */
 function permissionToAssociation(permission: string): string {
@@ -114,16 +125,22 @@ export class GitHubForge implements ForgeAdapter {
         };
       }
 
-      const { data: files } = await gh.pulls.listFiles({ ...base, pull_number: prNumber, per_page: 100 });
+      const files: PullFile[] = [];
+      for await (const page of gh.paginate.iterator(gh.pulls.listFiles, {
+        ...base,
+        pull_number: prNumber,
+        per_page: 100,
+      })) {
+        files.push(...page.data);
+        if (files.length >= MAX_CHANGED_FILES) break;
+      }
       context.changedFiles = files.map((f) => ({
         path: f.filename,
         status: f.status,
         additions: f.additions,
         deletions: f.deletions,
       }));
-      const diff = await gh.pulls.get({ ...base, pull_number: prNumber, mediaType: { format: 'diff' } });
-      // With the diff media type, `data` is the raw unified diff string.
-      context.diff = diff.data as unknown as string;
+      context.diff = await this.pullRequestDiff(prNumber, files);
 
       // A reply to an inline finding fires `pull_request_review_comment`, and the comment it answers
       // is not in `listComments` above — that's the issue-level timeline. Fetch the review comments
@@ -143,6 +160,22 @@ export class GitHubForge implements ForgeAdapter {
     }
 
     return context;
+  }
+
+  private async pullRequestDiff(prNumber: number, files: PullFilePatch[]): Promise<string> {
+    const gh = await this.gh();
+    try {
+      const { data } = await gh.pulls.get({
+        owner: this.owner,
+        repo: this.name,
+        pull_number: prNumber,
+        mediaType: { format: 'diff' },
+      });
+      return data as unknown as string;
+    } catch (err) {
+      if (!isDiffTooLarge(err)) throw err;
+      return buildDiffFromFiles(files);
+    }
   }
 
   async resolveActor(login: string): Promise<ForgeActor> {
