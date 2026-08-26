@@ -115,12 +115,13 @@ export class ForgejoForge implements ForgeAdapter {
         const { data: pr } = await this.api<{
           number: number; title: string; body?: string; user?: { login?: string }; state: string;
           head?: { ref?: string; sha?: string; repo?: { fork?: boolean } }; base?: { ref?: string };
+          draft?: boolean;
         }>('GET', `${this.prefix}/pulls/${prNumber}`);
         if (pr) {
           context.pullRequest = {
             number: pr.number, title: pr.title, body: pr.body ?? '', author: pr.user?.login ?? 'unknown',
             labels: [], state: pr.state, headRef: pr.head?.ref ?? '', baseRef: pr.base?.ref ?? '',
-            headSha: pr.head?.sha ?? '', fromFork: pr.head?.repo?.fork ?? false,
+            headSha: pr.head?.sha ?? '', fromFork: pr.head?.repo?.fork ?? false, isDraft: pr.draft ?? false,
           } satisfies ForgePullRequest;
         }
       }

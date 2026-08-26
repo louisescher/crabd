@@ -23,7 +23,7 @@ function fakeAdapter(overrides: Partial<ForgeAdapter> = {}): ForgeAdapter {
         repo,
         pullRequest: {
           number: 8, title: 'feat', body: '', author: 'lescher', labels: [], state: 'open',
-          headRef: 'feat', baseRef: 'main', headSha: 'sha', fromFork: false,
+          headRef: 'feat', baseRef: 'main', headSha: 'sha', fromFork: false, isDraft: false,
         },
         comments: [],
         changedFiles: [],
@@ -66,7 +66,7 @@ function prEvent(forge: 'github' | 'forgejo', association: string): ForgeEvent {
     actor: { login: 'lescher', association, isBot: false },
     pullRequest: {
       number: 8, title: 'feat', body: '', author: 'lescher', labels: [], state: 'open',
-      headRef: 'feat', baseRef: 'main', headSha: 'sha', fromFork: false,
+      headRef: 'feat', baseRef: 'main', headSha: 'sha', fromFork: false, isDraft: false,
     },
     raw: {},
   };

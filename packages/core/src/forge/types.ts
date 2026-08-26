@@ -56,6 +56,8 @@ export interface ForgePullRequest extends ForgeIssue {
   headSha: string;
   /** Whether the PR originates from a fork (affects write permissions). */
   fromFork: boolean;
+  /** Whether the PR is still a draft. Draft PRs are never auto-reviewed. */
+  isDraft: boolean;
 }
 
 /** A changed file in a pull request. */

@@ -122,6 +122,7 @@ export class GitHubForge implements ForgeAdapter {
           baseRef: pr.base.ref,
           headSha: pr.head.sha,
           fromFork: pr.head.repo?.fork ?? false,
+          isDraft: pr.draft ?? false,
         };
       }
 

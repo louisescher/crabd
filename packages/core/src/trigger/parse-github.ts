@@ -39,6 +39,7 @@ interface RawIssue {
 interface RawPull extends RawIssue {
   head?: { ref?: string; sha?: string; repo?: { fork?: boolean } };
   base?: { ref?: string };
+  draft?: boolean;
 }
 interface RawPayload {
   action?: string;
@@ -91,6 +92,7 @@ function normalizePull(raw: RawPull): ForgePullRequest {
     baseRef: raw.base?.ref ?? '',
     headSha: raw.head?.sha ?? '',
     fromFork: raw.head?.repo?.fork ?? false,
+    isDraft: raw.draft ?? false,
   };
 }
 

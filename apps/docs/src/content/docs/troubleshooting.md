@@ -150,5 +150,7 @@ attribute, so silence means it never got far enough to have anything to say. In 
 - **No trigger matched.** A comment must contain the trigger phrase, and a `pull_request` only
   auto-reviews on `opened` / `reopened` / `ready_for_review`, not on a push to the branch. Mention
   `/crabd review` to re-review.
+- **The pull request is a draft.** Draft PRs are never auto-reviewed. Mark the PR ready for review,
+  or mention `/crabd review` in it.
 - **The actor was filtered.** Bots never trigger crab'd (to avoid comment loops), and the actor's
   association must be in [`permissions.allowed_associations`](/self-hosting/#who-can-trigger-crabd).

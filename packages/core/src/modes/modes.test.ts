@@ -44,7 +44,7 @@ const baseContext: ForgeContext = {
   repo: { owner: 'acme', name: 'app', slug: 'acme/app', defaultBranch: 'main', isPrivate: true },
   pullRequest: {
     number: 5, title: 'Feature', body: 'body', author: 'dev', labels: [], state: 'open',
-    headRef: 'feat', baseRef: 'main', headSha: 'sha', fromFork: false,
+    headRef: 'feat', baseRef: 'main', headSha: 'sha', fromFork: false, isDraft: false,
   },
   comments: [],
   changedFiles: [],

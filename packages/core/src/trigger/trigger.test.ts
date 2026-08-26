@@ -100,7 +100,7 @@ describe('detectTrigger — comments', () => {
 });
 
 describe('detectTrigger — non-comment events', () => {
-  const prEvent = (action: string): ForgeEvent => ({
+  const prEvent = (action: string, isDraft = false): ForgeEvent => ({
     forge: 'github',
     kind: 'pull_request',
     action,
@@ -108,7 +108,7 @@ describe('detectTrigger — non-comment events', () => {
     actor: { login: 'dev', association: 'MEMBER', isBot: false },
     pullRequest: {
       number: 3, title: 'T', body: 'B', author: 'dev', labels: [], state: 'open',
-      headRef: 'feat', baseRef: 'main', headSha: 'abc', fromFork: false,
+      headRef: 'feat', baseRef: 'main', headSha: 'abc', fromFork: false, isDraft,
     },
     raw: {},
   });
@@ -119,6 +119,10 @@ describe('detectTrigger — non-comment events', () => {
   it('PR reopened / ready_for_review → review', () => {
     expect(detectTrigger(prEvent('reopened'), { triggerPhrase: '@crabd', enabledModes: ALL_MODES })?.mode).toBe('review');
     expect(detectTrigger(prEvent('ready_for_review'), { triggerPhrase: '@crabd', enabledModes: ALL_MODES })?.mode).toBe('review');
+  });
+  it('draft PR opened / reopened → no trigger', () => {
+    expect(detectTrigger(prEvent('opened', true), { triggerPhrase: '@crabd', enabledModes: ALL_MODES })).toBeNull();
+    expect(detectTrigger(prEvent('reopened', true), { triggerPhrase: '@crabd', enabledModes: ALL_MODES })).toBeNull();
   });
   it('PR synchronize (a push) → no trigger', () => {
     expect(detectTrigger(prEvent('synchronize'), { triggerPhrase: '@crabd', enabledModes: ALL_MODES })).toBeNull();

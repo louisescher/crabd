@@ -144,7 +144,7 @@ function ctx(pullRequest?: Partial<ForgeContext['pullRequest']>): ForgeContext {
             headRef: 'feat/x',
             baseRef: 'main',
             headSha: 'abc',
-            fromFork: false,
+            fromFork: false, isDraft: false,
             ...pullRequest,
           } as ForgeContext['pullRequest'],
         }

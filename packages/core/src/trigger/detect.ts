@@ -61,7 +61,8 @@ function splitModeKeyword(rest: string, modes: ReadonlySet<string>): { mode?: st
  * - A comment containing the trigger phrase → `mention`, unless it starts with a
  *   mode keyword (`review`/`implement`), which selects that mode. Remaining text
  *   becomes `userInstruction`.
- * - A pull_request opened/reopened/ready_for_review → `review` (NOT on every push/update).
+ * - A pull_request opened/reopened/ready_for_review → `review` (NOT on every push/update),
+ *   unless the PR is still a draft. A mention in a draft PR still works.
  * - An issue opened/assigned/labeled → `implement`.
  */
 export function detectTrigger(event: ForgeEvent, options: DetectOptions): TriggerResult | null {
@@ -83,6 +84,7 @@ export function detectTrigger(event: ForgeEvent, options: DetectOptions): Trigge
   if (event.kind === 'pull_request') {
     // Review on open / reopen / un-draft only — not `synchronize` (a push to the PR).
     // To re-review after changes, mention `/crabd review`.
+    if (event.pullRequest?.isDraft) return null;
     if (['opened', 'reopened', 'ready_for_review'].includes(event.action)) {
       return gate({ mode: 'review', explicit: true });
     }

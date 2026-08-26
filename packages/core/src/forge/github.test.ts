@@ -25,7 +25,7 @@ const event = {
     headRef: 'feat',
     baseRef: 'main',
     headSha: 'abc',
-    fromFork: false,
+    fromFork: false, isDraft: false,
   },
   raw: {},
 } as ForgeEvent;

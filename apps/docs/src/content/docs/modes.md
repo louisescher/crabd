@@ -26,7 +26,9 @@ it edited files anyway, it says so and leaves them uncommitted. To get the chang
 ## review
 
 **Triggered by** a pull request being opened, reopened, or marked ready for review, **not** on every
-push to the PR. To re-review after changes, comment `/crabd review`.
+push to the PR. Draft pull requests are never reviewed automatically: the review runs once the PR is
+marked ready for review. To review a draft anyway, or to re-review after changes, comment
+`/crabd review`.
 
 crab'd reads the diff and posts a review: a summary, inline findings anchored to file and line, and a
 plain-language verdict (**Good to merge (LGTM)**, **Nits found**, or **Please address the findings
