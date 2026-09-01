@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { debug, warn } from '../logger.ts';
 
 /** Run a git command, returning `undefined` instead of throwing when it fails. */
 function tryGit(args: string[], cwd: string): string | undefined {
@@ -82,6 +83,10 @@ export function resolveWorkspace(cwd: string, expectedHeadSha?: string): Workspa
         state.matchesPrHead || tryGit(['merge-base', '--is-ancestor', expectedHeadSha, 'HEAD'], cwd) !== undefined;
     }
   }
+  debug(
+    () =>
+      `workspace: head=${state.headSha ?? '(unresolved)'} matchesPrHead=${state.matchesPrHead ?? 'n/a'} containsPrHead=${state.containsPrHead ?? 'n/a'}`,
+  );
   return state;
 }
 
@@ -109,7 +114,12 @@ function detachOnto(cwd: string, headSha: string): boolean {
  * in the workspace (a cloud-auth step's credentials file, say) blocked the fix for no reason.
  */
 export function checkoutPrHead(cwd: string, headSha: string, prNumber?: number): boolean {
-  if ((tryGit(['status', '--porcelain', '--untracked-files=no'], cwd) ?? '').trim()) return false;
+  debug(() => `checkoutPrHead: attempting ${headSha} (PR #${prNumber ?? '?'})`);
+
+  if ((tryGit(['status', '--porcelain', '--untracked-files=no'], cwd) ?? '').trim()) {
+    warn(`checkoutPrHead: tracked modifications present in ${cwd}, leaving the checkout as-is rather than discarding them`);
+    return false;
+  }
 
   // Already in the object store (merge-ref checkout, or full history of the head branch).
   if (tryGit(['rev-parse', '--verify', '--quiet', `${headSha}^{commit}`], cwd) && detachOnto(cwd, headSha)) {
@@ -126,5 +136,6 @@ export function checkoutPrHead(cwd: string, headSha: string, prNumber?: number):
     // Detach onto the sha itself rather than FETCH_HEAD so the result is unambiguous.
     if (detachOnto(cwd, headSha)) return true;
   }
+  warn(`checkoutPrHead: could not check out PR head ${headSha}, falling back to the current checkout`);
   return false;
 }

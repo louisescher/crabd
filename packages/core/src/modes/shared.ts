@@ -1,6 +1,8 @@
 import type { ForgeContext, ForgeEvent } from '../forge/types.ts';
 import type { ForgeAdapter } from '../forge/types.ts';
-import { collectChanges, hasChanges } from '../git/changes.ts';
+import { type Baseline, collectChangesSinceBaseline, hasChanges } from '../git/changes.ts';
+import { renderVetFailureMessage, scanForSecrets } from '../git/vet.ts';
+import { log } from '../logger.ts';
 
 /** The issue/PR number the event concerns. */
 export function subjectNumber(context: ForgeContext, event: ForgeEvent): number | undefined {
@@ -18,6 +20,8 @@ export interface CommitOptions {
    * still compile; pass it. An explicit `false` throws rather than committing.
    */
   writesAllowed?: boolean;
+  baseline: Baseline;
+  secretScan?: boolean;
 }
 
 /**
@@ -33,13 +37,22 @@ export async function commitWorkingChanges(options: CommitOptions): Promise<bool
     throw new Error('crabd: refusing to commit: writes are disabled for this repository (permissions.write: false)');
   }
   if (!hasChanges(options.cwd)) return false;
-  const changes = collectChanges(options.cwd);
+  const changes = collectChangesSinceBaseline(options.cwd, options.baseline);
   if (changes.length === 0) return false;
+
+  if (options.secretScan !== false) {
+    const vet = scanForSecrets(changes);
+    if (!vet.ok) {
+      throw new Error(`crabd: refusing to commit, ${renderVetFailureMessage(vet)}`);
+    }
+  }
+
   await options.adapter.commitToBranch({
     branch: options.branch,
     message: options.message,
     changes,
     baseBranch: options.baseBranch,
   });
+  log(`committed ${changes.length} change(s) to \`${options.branch}\``);
   return true;
 }

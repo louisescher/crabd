@@ -119,6 +119,7 @@ export interface TrackingComment {
   id: number;
   /** Where the comment lives (issue or PR number). */
   target: number;
+  body?: string;
 }
 
 /** A single inline review finding. */
@@ -189,10 +190,12 @@ export interface ForgeAdapter {
   findTrackingComment(target: number, marker?: string): Promise<TrackingComment | undefined>;
 
   /** Add a reaction (e.g. `eyes`) to a comment — a fast acknowledgment of a trigger. */
-  reactToComment(commentId: number, reaction: ForgeReaction): Promise<void>;
+  reactToComment(commentId: number, reaction: ForgeReaction, kind?: 'issue' | 'review'): Promise<void>;
 
   /** Update the tracking comment in place. */
   updateTrackingComment(ref: TrackingComment, body: string): Promise<void>;
+
+  replyToReviewComment(pullNumber: number, commentId: number, body: string): Promise<void>;
 
   /** Submit a PR review (summary + optional inline comments). */
   postReview(prNumber: number, review: ReviewSubmission): Promise<void>;

@@ -21,6 +21,14 @@ export const MEMORY_MARKER = '<!-- crabd:memory -->';
 /** Base URL of the crab'd documentation site, for the actionable links in failure comments. */
 const DOCS_BASE = 'https://crabd.lou.gg';
 
+function handledMarker(commentId: number): string {
+  return `<!-- crabd:handled:${commentId} -->`;
+}
+
+export function isCommentHandled(body: string | undefined, commentId: number): boolean {
+  return Boolean(body?.includes(handledMarker(commentId)));
+}
+
 /** How crab'd presents itself in a tracking comment: the display name, brand emoji, footer. */
 export interface Branding {
   /** Display name used in comments (e.g. `crab'd`). */
@@ -49,6 +57,7 @@ export interface CommentContext extends Branding {
    * state — the user should not have to wait for the run to end to learn crab'd can't do something.
    */
   advisories?: string[];
+  handledCommentId?: number;
 }
 
 /** The emoji prefix (`🦀 `) for a comment lead, or `''` when no emoji is configured. */
@@ -77,8 +86,9 @@ function advisoryBlock(b: CommentContext): string {
  */
 function footer(b: CommentContext): string {
   const advisory = advisoryBlock(b);
-  if (!b.footer) return `${advisory}\n${TRACKING_MARKER}`;
-  return `${advisory}\n\n<sub>${prefix(b)}posted by [${b.name}](https://github.com/louisescher/crabd)</sub>\n${TRACKING_MARKER}`;
+  const handled = b.handledCommentId !== undefined ? `\n${handledMarker(b.handledCommentId)}` : '';
+  if (!b.footer) return `${advisory}\n${TRACKING_MARKER}${handled}`;
+  return `${advisory}\n\n<sub>${prefix(b)}posted by [${b.name}](https://github.com/louisescher/crabd)</sub>\n${TRACKING_MARKER}${handled}`;
 }
 
 const MODE_VERB: Record<string, string> = {

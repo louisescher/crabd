@@ -61,6 +61,8 @@ export const mentionMode: ModeDefinition<MentionOutput> = {
           message: ctx.data.commit_message ?? "crab'd: apply requested changes",
           baseBranch: ctx.context.repo.defaultBranch,
           writesAllowed: ctx.config.permissions.write,
+          baseline: ctx.baseline,
+          secretScan: ctx.config.permissions.secretScan,
         });
         if (committed) summary += `\n\n✅ Committed changes to \`${branch}\`.`;
       }

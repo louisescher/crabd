@@ -1,5 +1,8 @@
 # crab'd action image — self-contained: node_modules + built packages + the Flue app,
 # so a run does zero install/build (only the model turn). Built once per release.
+
+FROM zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f AS gitleaks
+
 FROM node:22-bookworm-slim
 
 # git: crab'd inspects and commits the working tree, and (with a token in the sandbox) reads other
@@ -14,6 +17,8 @@ RUN apt-get update \
   && apt-get update \
   && apt-get install -y --no-install-recommends gh \
   && rm -rf /var/lib/apt/lists/*
+
+COPY --from=gitleaks /usr/bin/gitleaks /usr/local/bin/gitleaks
 
 RUN corepack enable && corepack prepare pnpm@11.4.0 --activate
 

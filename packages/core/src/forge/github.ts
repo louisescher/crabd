@@ -208,7 +208,7 @@ export class GitHubForge implements ForgeAdapter {
       per_page: 100,
     });
     const existing = data.find((c) => (c.body ?? '').includes(marker));
-    return existing ? { id: existing.id, target } : undefined;
+    return existing ? { id: existing.id, target, body: existing.body ?? undefined } : undefined;
   }
 
   async updateTrackingComment(ref: TrackingComment, body: string): Promise<void> {
@@ -216,13 +216,24 @@ export class GitHubForge implements ForgeAdapter {
     await gh.issues.updateComment({ owner: this.owner, repo: this.name, comment_id: ref.id, body });
   }
 
-  async reactToComment(commentId: number, reaction: string): Promise<void> {
+  async reactToComment(commentId: number, reaction: string, kind: 'issue' | 'review' = 'issue'): Promise<void> {
     const gh = await this.gh();
-    await gh.reactions.createForIssueComment({
+    const base = { owner: this.owner, repo: this.name, content: reaction as 'eyes' };
+    if (kind === 'review') {
+      await gh.reactions.createForPullRequestReviewComment({ ...base, comment_id: commentId });
+    } else {
+      await gh.reactions.createForIssueComment({ ...base, comment_id: commentId });
+    }
+  }
+
+  async replyToReviewComment(pullNumber: number, commentId: number, body: string): Promise<void> {
+    const gh = await this.gh();
+    await gh.pulls.createReplyForReviewComment({
       owner: this.owner,
       repo: this.name,
+      pull_number: pullNumber,
       comment_id: commentId,
-      content: reaction as 'eyes',
+      body,
     });
   }
 

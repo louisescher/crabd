@@ -34,6 +34,8 @@ export const implementMode: ModeDefinition<ImplementOutput> = {
       message: ctx.data.pr_title,
       baseBranch: ctx.context.repo.defaultBranch,
       writesAllowed: ctx.config.permissions.write,
+      baseline: ctx.baseline,
+      secretScan: ctx.config.permissions.secretScan,
     });
 
     if (!committed) {

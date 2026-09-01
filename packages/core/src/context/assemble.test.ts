@@ -378,6 +378,20 @@ describe('review-only context sections', () => {
     expect(out).not.toContain('## Changed files at HEAD');
   });
 
+  it('sends file contents (but not anchor lines) for a memory-eligible mention', () => {
+    const out = assemblePrompt({
+      mode: 'mention',
+      config: makeConfig(),
+      context: { repo, comments: [], changedFiles, diff } as ForgeContext,
+      event,
+      trigger: { mode: 'mention', explicit: true },
+      cwd: dir,
+      memoryEligible: true,
+    }).message;
+    expect(out).toContain('## Changed files at HEAD (line-numbered)');
+    expect(out).not.toContain('## Where you may anchor inline findings');
+  });
+
   it('skips a file it cannot read rather than failing the run', () => {
     const out = assemblePrompt({
       mode: 'review',

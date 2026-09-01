@@ -76,6 +76,7 @@ export interface ResolvedConfig {
     allowedAssociations: string[];
     /** Whether crab'd may commit or open pull requests. See `permissions.write`. */
     write: boolean;
+    secretScan: boolean;
   };
   /** How crab'd presents itself in tracking comments. */
   appearance: { name: string; emoji: string; footer: boolean };
@@ -330,6 +331,8 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
   const write =
     pickScalar('permissions.write', (c) => c.permissions?.write, layers, locked) ??
     modes.implement?.enabled !== false;
+  const secretScan =
+    pickScalar('permissions.secret_scan', (c) => c.permissions?.secret_scan, layers, locked) ?? true;
 
   // Appearance: name falls back to the default if blank (avoids a degenerate `****`);
   // emoji keeps '' as an explicit "no emoji" choice, so only `?? default` for the unset case.
@@ -412,7 +415,7 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
     triggerPhrase,
     thinkingLevel,
     providers: { allowlist, gatewayUrl, custom },
-    permissions: { allowedAssociations, write },
+    permissions: { allowedAssociations, write, secretScan },
     appearance: { name: appearanceName, emoji: appearanceEmoji, footer: appearanceFooter },
     review: {
       commentOnly,

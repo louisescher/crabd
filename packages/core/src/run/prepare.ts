@@ -2,14 +2,16 @@ import type { MemoryWrite, ResolvedConfig, ThinkingLevel } from '@crabd/config';
 import { assemblePrompt } from '../context/assemble.ts';
 import { loadProjectContext } from '../context/project.ts';
 import type { ForgeAdapter, ForgeContext, ForgeEvent, TrackingComment } from '../forge/types.ts';
+import { type Baseline, snapshotBaseline } from '../git/changes.ts';
 import { checkoutPrHead, resolveWorkspace, type WorkspaceState } from '../git/workspace.ts';
+import { debug, warn } from '../logger.ts';
 import { resolveMemoryTarget } from '../memory/commit.ts';
 import { isCorrectionReply } from '../memory/gate.ts';
 import { getMode, listModes } from '../modes/registry.ts';
 import { subjectNumber } from '../modes/shared.ts';
 import { assertProvidersAllowed } from '../policy/providers.ts';
 import { authorizeActor } from '../policy/trust.ts';
-import { renderWorking, type CommentContext } from '../report/tracking.ts';
+import { isCommentHandled, renderWorking, type CommentContext } from '../report/tracking.ts';
 import { detectTrigger, type TriggerResult } from '../trigger/detect.ts';
 
 /** Forge tools that change the repository, dropped from a mode's toolset when writes are off. */
@@ -44,6 +46,7 @@ export interface RunPlan {
    * review — surfaced in the prompt, and worth logging by the caller.
    */
   workspace?: WorkspaceState;
+  baseline: Baseline;
 }
 
 /** What the turn is allowed to do about memory, decided before the model starts. */
@@ -181,6 +184,22 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
   const trigger = detectTrigger(event, { triggerPhrase: config.triggerPhrase, enabledModes, knownModes });
   if (!trigger) return { status: 'skip', reason: 'no trigger matched this event' };
 
+  if (event.comment) {
+    const earlySubject = event.pullRequest?.number ?? event.issue?.number;
+    if (earlySubject !== undefined) {
+      try {
+        const existing = await adapter.findTrackingComment(earlySubject);
+        if (isCommentHandled(existing?.body, event.comment.id)) {
+          warn(
+            `duplicate trigger: comment ${event.comment.id} on #${earlySubject} was already claimed by a previous run, skipping. ` +
+              'If this happens often, add a `concurrency:` block to the workflow that dispatches crabd.',
+          );
+          return { status: 'skip', reason: `duplicate trigger: comment ${event.comment.id} on #${earlySubject} was already claimed by a previous run` };
+        }
+      } catch {}
+    }
+  }
+
   let actor = event.actor;
   if (event.forge === 'forgejo' && !actor.isBot && actor.association.toUpperCase() === 'NONE') {
     try {
@@ -197,7 +216,7 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
   // picked it up immediately, before the slower context fetch and model run.
   if (event.comment) {
     try {
-      await adapter.reactToComment(event.comment.id, 'eyes');
+      await adapter.reactToComment(event.comment.id, 'eyes', event.kind === 'pull_request_review_comment' ? 'review' : 'issue');
     } catch {
       // Reactions are best-effort.
     }
@@ -267,6 +286,9 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
     }
   }
 
+  const baseline = snapshotBaseline(cwd);
+  debug(`baseline: ${baseline.size} pre-existing dirty/untracked path(s) in ${cwd}`);
+
   // Repo-authored context: the target repo's own AGENTS.md/CLAUDE.md and skill manifest,
   // gated by config. Read-only and best-effort — never blocks the run.
   const project = loadProjectContext(cwd, {
@@ -279,6 +301,8 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
     },
   });
 
+  const { memory, advisories } = resolveRunMemory(config, context, event, input.advisories ?? []);
+
   const prompt = assemblePrompt({
     mode: resolvedTrigger.mode,
     config,
@@ -288,10 +312,14 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
     project,
     workspace,
     cwd,
+    memoryEligible: memory.writable,
   });
 
-  const { memory, advisories } = resolveRunMemory(config, context, event, input.advisories ?? []);
-  const branding: CommentContext = { ...config.appearance, ...(advisories.length > 0 ? { advisories } : {}) };
+  const branding: CommentContext = {
+    ...config.appearance,
+    ...(advisories.length > 0 ? { advisories } : {}),
+    ...(event.comment ? { handledCommentId: event.comment.id } : {}),
+  };
 
   // Reuse an existing crab'd comment on this subject (sticky) instead of stacking new ones.
   let tracking = await adapter.findTrackingComment(subject);
@@ -315,6 +343,7 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
       branding,
       memory,
       workspace,
+      baseline,
     },
     context,
     trigger: resolvedTrigger,

@@ -26,6 +26,7 @@ function fakeAdapter(overrides: Partial<ForgeAdapter> = {}): ForgeAdapter {
     findTrackingComment: vi.fn(async () => undefined),
     reactToComment: vi.fn(async () => {}),
     updateTrackingComment: vi.fn(async () => {}),
+    replyToReviewComment: vi.fn(async () => {}),
     postReview: vi.fn(async () => {}),
     commitToBranch: vi.fn(async () => {}),
     openOrUpdatePR: vi.fn(async (): Promise<PullRequestRef> => ({ number: 8, url: 'http://pr/8' })),

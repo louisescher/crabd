@@ -28,6 +28,7 @@ import { CrabdRefuter } from './agents/crabd-refuter.ts';
 import { CrabdTurn } from './agents/crabd-turn.ts';
 import { loadResolvedConfig } from './config-loader.ts';
 import { buildForge, detectForge } from './forge-factory.ts';
+import { log, warn } from './logger.ts';
 import { buildProviders, unsizedCustomModels } from './providers.ts';
 import {
   buildRunContext,
@@ -45,19 +46,6 @@ import {
   renderNpmrcAdvisory,
   scopedRepoNames,
 } from './sandbox.ts';
-
-function log(message: string): void {
-  process.stderr.write(`[crabd] ${message}\n`);
-}
-
-/**
- * Like {@link log}, but also surfaces the message as a GitHub Actions warning annotation (visible in
- * the run summary, not just buried in the step log) when running under Actions.
- */
-function warn(message: string): void {
-  if (process.env.GITHUB_ACTIONS === 'true') process.stdout.write(`::warning::[crabd] ${message}\n`);
-  process.stderr.write(`[crabd] ${message}\n`);
-}
 
 /** Extract image URLs from markdown (`![](url)`) and bare image links in text. */
 function extractImageUrls(...texts: (string | undefined)[]): string[] {

@@ -34,6 +34,7 @@ function fakeAdapter(overrides: Partial<ForgeAdapter> = {}): ForgeAdapter {
     findTrackingComment: vi.fn(async () => undefined),
     reactToComment: vi.fn(async () => {}),
     updateTrackingComment: vi.fn(async () => {}),
+    replyToReviewComment: vi.fn(async () => {}),
     postReview: vi.fn(async () => {}),
     commitToBranch: vi.fn(async () => {}),
     openOrUpdatePR: vi.fn(async (): Promise<PullRequestRef> => ({ number: 8, url: 'http://pr/8' })),
@@ -276,5 +277,68 @@ describe('prepareRun with writes disabled', () => {
       expect(outcome.plan.mode).toBe('review');
       expect(outcome.plan.toolNames).toEqual(['comment', 'review']);
     }
+  });
+});
+
+describe('prepareRun idempotency guard', () => {
+  it('skips a comment already claimed by a previous run, before any write', async () => {
+    const findTrackingComment = vi.fn(async () => ({
+      id: 1,
+      target: 8,
+      body: 'crab\'d is working...\n<!-- crabd:handled:5 -->\n<!-- crabd:tracking -->',
+    }));
+    const adapter = fakeAdapter({ findTrackingComment });
+    const outcome = await prepareRun({
+      adapter,
+      config: config(['MEMBER']),
+      event: commentEvent('/crabd review'),
+      cwd: '/nonexistent',
+    });
+    expect(outcome.status).toBe('skip');
+    if (outcome.status === 'skip') expect(outcome.reason).toMatch(/duplicate trigger/);
+    expect(adapter.reactToComment).not.toHaveBeenCalled();
+    expect(adapter.createTrackingComment).not.toHaveBeenCalled();
+  });
+
+  it('proceeds normally for a different comment id on the same subject', async () => {
+    const findTrackingComment = vi.fn(async () => ({
+      id: 1,
+      target: 8,
+      body: 'crab\'d is working...\n<!-- crabd:handled:999 -->\n<!-- crabd:tracking -->',
+    }));
+    const adapter = fakeAdapter({ findTrackingComment });
+    const outcome = await prepareRun({
+      adapter,
+      config: config(['MEMBER']),
+      event: commentEvent('/crabd review'),
+      cwd: '/nonexistent',
+    });
+    expect(outcome.status).toBe('run');
+  });
+
+  it('fails open when the tracking-comment lookup throws', async () => {
+    const findTrackingComment = vi.fn(async () => undefined).mockImplementationOnce(async () => {
+      throw new Error('network blip');
+    });
+    const adapter = fakeAdapter({ findTrackingComment });
+    const outcome = await prepareRun({
+      adapter,
+      config: config(['MEMBER']),
+      event: commentEvent('/crabd review'),
+      cwd: '/nonexistent',
+    });
+    expect(outcome.status).toBe('run');
+  });
+
+  it('does not guard a non-comment event (no event.comment to dedup on)', async () => {
+    const findTrackingComment = vi.fn(async () => undefined);
+    const adapter = fakeAdapter({ findTrackingComment });
+    const outcome = await prepareRun({
+      adapter,
+      config: config(['MEMBER']),
+      event: prEvent('github', 'MEMBER'),
+      cwd: '/nonexistent',
+    });
+    expect(outcome.status).toBe('run');
   });
 });

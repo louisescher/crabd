@@ -31,6 +31,7 @@ function fakeAdapter(overrides: Partial<ForgeAdapter> = {}): ForgeAdapter {
     findTrackingComment: vi.fn(async () => undefined),
     reactToComment: vi.fn(async () => {}),
     updateTrackingComment: vi.fn(async () => {}),
+    replyToReviewComment: vi.fn(async () => {}),
     postReview: vi.fn(async () => {}),
     commitToBranch: vi.fn(async () => {}),
     openOrUpdatePR: vi.fn(async (): Promise<PullRequestRef> => ({ number: 2, url: 'http://pr/2' })),
@@ -95,6 +96,7 @@ describe('review mode finalize', () => {
       context: baseContext,
       trigger: { mode: 'review', explicit: true },
       cwd: '/tmp',
+      baseline: new Map(),
       data: {
         summary: 'Looks mostly good.',
         verdict: 'REQUEST_CHANGES',
@@ -132,6 +134,7 @@ describe('review mode finalize', () => {
       context: baseContext,
       trigger: { mode: 'review', explicit: true },
       cwd: '/tmp',
+      baseline: new Map(),
       data: { summary: 'Ship it.', verdict: 'APPROVE', findings: [] },
     });
 
@@ -159,6 +162,7 @@ describe('review mode finalize', () => {
       context: { ...baseContext, diff },
       trigger: { mode: 'review', explicit: true },
       cwd: '/tmp',
+      baseline: new Map(),
       data: {
         summary: 'Review.',
         verdict: 'REQUEST_CHANGES',
@@ -189,6 +193,7 @@ describe('review mode finalize', () => {
       context: baseContext,
       trigger: { mode: 'review', explicit: true },
       cwd: '/tmp',
+      baseline: new Map(),
       data: {
         summary: 'Review.',
         verdict: 'REQUEST_CHANGES',
@@ -224,6 +229,7 @@ describe('review mode finalize', () => {
       context: { ...baseContext, diff },
       trigger: { mode: 'review', explicit: true },
       cwd: '/tmp',
+      baseline: new Map(),
       // Commentable lines are 1-2; 4 is a near miss, well within tolerance.
       data: { summary: 'Review.', verdict: 'COMMENT', findings: [finding({ line: 4, severity: 'nit' })] },
     });
@@ -244,6 +250,7 @@ describe('review mode finalize', () => {
       context: baseContext,
       trigger: { mode: 'review', explicit: true },
       cwd: '/tmp',
+      baseline: new Map(),
       data: { summary: 'Fine.', verdict: 'APPROVE', findings: [finding({ severity: 'blocker' })] },
     });
 
@@ -261,6 +268,7 @@ describe('review mode finalize', () => {
       context: baseContext,
       trigger: { mode: 'review', explicit: true },
       cwd: '/tmp',
+      baseline: new Map(),
       data: { summary: 'Fine.', verdict: 'APPROVE', findings: [finding({ severity: 'nit' })] },
     });
 
@@ -277,6 +285,7 @@ describe('review mode finalize', () => {
       context: baseContext,
       trigger: { mode: 'review', explicit: true },
       cwd: '/tmp',
+      baseline: new Map(),
       data: {
         summary: 'Review.',
         verdict: 'COMMENT',
@@ -453,7 +462,11 @@ describe('mention mode finalize', () => {
       .finalize({
         adapter,
         config: resolveConfig({
-          layers: { repo: over.write === undefined ? {} : { permissions: { write: over.write } } },
+          layers: {
+            repo: {
+              permissions: { secret_scan: false, ...(over.write === undefined ? {} : { write: over.write }) },
+            },
+          },
         }),
         event: baseEvent,
         context: baseContext,
@@ -463,6 +476,7 @@ describe('mention mode finalize', () => {
           ...(over.instruction ? { userInstruction: over.instruction } : {}),
         },
         cwd: dirty,
+        baseline: new Map(),
         data,
       })
       .then((result) => ({ result, adapter }));
@@ -502,6 +516,7 @@ describe('mention mode finalize', () => {
       context: baseContext,
       trigger: { mode: 'mention', explicit: false },
       cwd: '/tmp',
+      baseline: new Map(),
       data: { response: 'It parses the header.', made_changes: false },
     });
     expect(adapter.commitToBranch).not.toHaveBeenCalled();
@@ -515,6 +530,7 @@ describe('commitWorkingChanges write gate', () => {
       commitWorkingChanges({
         adapter: fakeAdapter(),
         cwd: '/tmp',
+        baseline: new Map(),
         branch: 'any',
         message: 'any',
         writesAllowed: false,

@@ -1,6 +1,7 @@
 import type * as v from 'valibot';
 import type { ResolvedConfig } from '@crabd/config';
 import type { ForgeAdapter, ForgeContext, ForgeEvent } from '../forge/types.ts';
+import type { Baseline } from '../git/changes.ts';
 import type { WorkspaceState } from '../git/workspace.ts';
 import type { TriggerResult } from '../trigger/detect.ts';
 
@@ -20,6 +21,7 @@ export interface FinalizeContext<T = unknown> {
    * disk need it to know whether those files are the change under review at all.
    */
   workspace?: WorkspaceState;
+  baseline: Baseline;
 }
 
 export interface FinalizeResult {

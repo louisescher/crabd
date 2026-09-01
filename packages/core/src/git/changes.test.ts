@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { changesForPaths, collectChanges, hasChanges } from './changes.ts';
+import { changesForPaths, collectChangesSinceBaseline, hasChanges, snapshotBaseline } from './changes.ts';
 
 let dir: string;
 
@@ -20,34 +20,70 @@ beforeAll(() => {
   writeFileSync(join(dir, 'gone.txt'), 'B');
   git(['add', '-A']);
   git(['commit', '-q', '-m', 'init']);
-
-  // Working-tree changes: modify, delete, add-new.
-  writeFileSync(join(dir, 'keep.txt'), 'A2');
-  rmSync(join(dir, 'gone.txt'));
-  writeFileSync(join(dir, 'new.txt'), 'C');
 });
 
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-describe('collectChanges', () => {
-  it('emits upsert (base64) for modified/added and delete for removed files', () => {
-    const byPath = new Map(collectChanges(dir).map((c) => [c.path, c]));
+describe('collectChangesSinceBaseline', () => {
+  it('excludes a file that was already untracked at baseline and is left unchanged', () => {
+    writeFileSync(join(dir, 'ambient.txt'), 'pre-existing, never touched by the agent');
+    const baseline = snapshotBaseline(dir);
 
-    expect(byPath.get('keep.txt')).toEqual({
-      path: 'keep.txt',
-      op: 'upsert',
-      contentBase64: Buffer.from('A2').toString('base64'),
-    });
-    expect(byPath.get('new.txt')).toEqual({
-      path: 'new.txt',
-      op: 'upsert',
-      contentBase64: Buffer.from('C').toString('base64'),
-    });
-    expect(byPath.get('gone.txt')).toEqual({ path: 'gone.txt', op: 'delete' });
+    writeFileSync(join(dir, 'touched.txt'), 'the agent wrote this');
+
+    const changes = collectChangesSinceBaseline(dir, baseline);
+    const paths = changes.map((c) => c.path);
+    expect(paths).toContain('touched.txt');
+    expect(paths).not.toContain('ambient.txt');
+  });
+
+  it('includes a file that was already dirty at baseline but is changed again afterward', () => {
+    writeFileSync(join(dir, 'keep.txt'), 'A2');
+    const baseline = snapshotBaseline(dir);
+
+    writeFileSync(join(dir, 'keep.txt'), 'A3');
+
+    const changes = collectChangesSinceBaseline(dir, baseline);
+    const change = changes.find((c) => c.path === 'keep.txt');
+    expect(change).toEqual({ path: 'keep.txt', op: 'upsert', contentBase64: Buffer.from('A3').toString('base64') });
+  });
+
+  it('excludes a file that was already dirty at baseline and left with the same content', () => {
+    writeFileSync(join(dir, 'stable.txt'), 'same throughout');
+    const baseline = snapshotBaseline(dir);
+
+    const changes = collectChangesSinceBaseline(dir, baseline);
+    expect(changes.map((c) => c.path)).not.toContain('stable.txt');
+  });
+
+  it('includes a deletion that happens after the baseline', () => {
+    const baseline = snapshotBaseline(dir);
+    rmSync(join(dir, 'gone.txt'));
+
+    const changes = collectChangesSinceBaseline(dir, baseline);
+    expect(changes).toContainEqual({ path: 'gone.txt', op: 'delete' });
+  });
+
+  it('excludes a deletion that already happened at baseline time', () => {
+    const baseline = snapshotBaseline(dir);
+    const changes = collectChangesSinceBaseline(dir, baseline);
+    expect(changes.map((c) => c.path)).not.toContain('gone.txt');
   });
 
   it('reports a dirty working tree', () => {
     expect(hasChanges(dir)).toBe(true);
+  });
+});
+
+describe('snapshotBaseline', () => {
+  it('never throws for a directory that is not a git repository', () => {
+    const notARepo = mkdtempSync(join(tmpdir(), 'crabd-not-a-repo-'));
+    try {
+      expect(() => snapshotBaseline(notARepo)).not.toThrow();
+      expect(snapshotBaseline(notARepo).size).toBe(0);
+    } finally {
+      rmSync(notARepo, { recursive: true, force: true });
+    }
   });
 });
 
@@ -56,8 +92,6 @@ describe('changesForPaths', () => {
     const changes = changesForPaths(dir, ['keep.txt']);
     expect(changes.map((c) => c.path)).toEqual(['keep.txt']);
     expect(changes[0]?.op).toBe('upsert');
-    // `new.txt` and the deleted `gone.txt` are both dirty, and both must stay out of it.
-    expect(collectChanges(dir).length).toBeGreaterThan(1);
   });
 
   it('emits a deletion for a path that no longer exists', () => {
@@ -70,6 +104,8 @@ describe('changesForPaths', () => {
 
   it('base64-encodes content so binary survives', () => {
     const [change] = changesForPaths(dir, ['keep.txt']);
-    expect(Buffer.from(change!.contentBase64!, 'base64').toString('utf-8')).toBe('A2');
+    expect(Buffer.from(change!.contentBase64!, 'base64').toString('utf-8')).toBe(
+      execFileSync('cat', [join(dir, 'keep.txt')], { encoding: 'utf-8' }),
+    );
   });
 });

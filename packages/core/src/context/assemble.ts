@@ -807,6 +807,7 @@ function renderContext(
   review = false,
   /** Checkout root, needed to read the changed files. Omitted = skip the file-contents section. */
   cwd?: string,
+  includeFileContents = false,
 ): string {
   const lines: string[] = [];
   lines.push(`## Repository\n${context.repo.slug} (default branch: ${context.repo.defaultBranch})`);
@@ -834,9 +835,7 @@ function renderContext(
     lines.push(`## Diff\n${rendered}`);
   }
 
-  // Review only, and only when there is a diff to anchor against: the real file contents so the
-  // model can judge a hunk in context, and the legal anchor lines so it doesn't have to guess them.
-  if (review && context.diff) {
+  if ((review || includeFileContents) && context.diff) {
     // Never send file contents from a tree that doesn't contain the change. They would be the
     // pre-change version of every file, under line numbers the diff's don't match, which is worse
     // than sending nothing because the model has no way to tell they are stale.
@@ -845,8 +844,10 @@ function renderContext(
       const contents = renderFileContents(cwd, context.changedFiles, context.diff);
       if (contents) lines.push(contents);
     }
-    const anchors = renderAnchorableLines(describeCommentableLines(context.diff));
-    if (anchors) lines.push(anchors);
+    if (review) {
+      const anchors = renderAnchorableLines(describeCommentableLines(context.diff));
+      if (anchors) lines.push(anchors);
+    }
   }
 
   // The triggering comment is rendered in full under its own header below; drop it here so it isn't
@@ -942,6 +943,7 @@ export interface AssembleOptions {
    * content alongside the diff; omit it to skip that section (the agent still has its file tools).
    */
   cwd?: string;
+  memoryEligible?: boolean;
 }
 
 /**
@@ -990,7 +992,7 @@ function renderProjectContext(project: ProjectContext | undefined): string[] {
     blocks.push(
       [
         '## What you have learned about this repository',
-        'Each of these was recorded after a human corrected you on a previous run. Treat them as settled rulings for this repository: do not re-raise a finding one of them rules out, and do not re-argue the decision. If a memory genuinely conflicts with what you observe in the code, say so in your answer rather than silently ignoring it.',
+        "Each of these was recorded after a human corrected you on a previous run. The heading is that memory's exact `name`, so if `remember` is called again about the same thing, reusing this name replaces the entry instead of leaving a second, overlapping one behind. Treat these as settled rulings for this repository: do not re-raise a finding one of them rules out, and do not re-argue the decision. If a memory genuinely conflicts with what you observe in the code, say so in your answer rather than silently ignoring it.",
         '',
         list,
       ].join('\n'),
@@ -1010,7 +1012,7 @@ function renderProjectContext(project: ProjectContext | undefined): string[] {
  *   into every mode, so a mention can steer a review or implementation).
  */
 export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
-  const { mode, config, context, event, trigger, project, workspace, cwd } = options;
+  const { mode, config, context, event, trigger, project, workspace, cwd, memoryEligible } = options;
 
   const base = config.prompt.override ?? baseInstructions(mode, config, event.forge);
   const appends = [config.prompt.instructions, config.modes[mode]?.instructions].filter(
@@ -1018,7 +1020,9 @@ export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
   );
   const instructions = [base, ...appends, ...renderProjectContext(project)].join('\n\n');
 
-  const parts = [renderContext(context, event, config.context.fullDiff, workspace, mode === 'review', cwd)];
+  const parts = [
+    renderContext(context, event, config.context.fullDiff, workspace, mode === 'review', cwd, memoryEligible ?? false),
+  ];
   if (trigger.userInstruction) {
     parts.push(`## Instruction from the user\n${trigger.userInstruction}`);
   }

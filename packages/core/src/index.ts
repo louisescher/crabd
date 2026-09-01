@@ -117,7 +117,13 @@ export { implementMode, ImplementOutputSchema, type ImplementOutput } from './mo
 export { commitWorkingChanges, subjectNumber } from './modes/shared.ts';
 
 // Git
-export { collectChanges, hasChanges } from './git/changes.ts';
+export {
+  collectChangesSinceBaseline,
+  hasChanges,
+  snapshotBaseline,
+  type Baseline,
+  type BaselineEntry,
+} from './git/changes.ts';
 export { checkoutPrHead, resolveWorkspace, type WorkspaceState } from './git/workspace.ts';
 
 // Rate limiting

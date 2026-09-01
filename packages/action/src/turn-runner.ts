@@ -1,5 +1,5 @@
 import { getHeapStatistics } from 'node:v8';
-import { init, observe, type JsonValue } from '@flue/runtime';
+import { init, observe, type FlueEvent, type JsonValue } from '@flue/runtime';
 import {
   buildAttemptChain,
   expandCommentableLines,
@@ -11,6 +11,7 @@ import {
 } from '@crabd/core';
 import { providerOf, type ResolvedRateLimit } from '@crabd/config';
 import { CrabdTurn, type TurnCreation } from './agents/crabd-turn.ts';
+import { debug, log, warn } from './logger.ts';
 import { runContext } from './run-context.ts';
 import { verifyFindings } from './verify.ts';
 
@@ -49,16 +50,6 @@ const SUBMIT_NUDGE = [
  * the stale tail was never the problem.
  */
 const MAX_HARNESS_RETRIES = 1;
-
-function log(message: string): void {
-  process.stderr.write(`[crabd] ${message}\n`);
-}
-
-/** Like {@link log}, but also surfaces the message as a GitHub Actions warning annotation. */
-function warn(message: string): void {
-  if (process.env.GITHUB_ACTIONS === 'true') process.stdout.write(`::warning::[crabd] ${message}\n`);
-  process.stderr.write(`[crabd] ${message}\n`);
-}
 
 /** How often the heap watchdog samples usage. */
 const HEAP_CHECK_INTERVAL_MS = 5_000;
@@ -264,46 +255,102 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
     }
   }, HEAP_CHECK_INTERVAL_MS);
 
+  const truncate = (value: unknown, max = 300): string => {
+    const s = typeof value === 'string' ? value : JSON.stringify(value);
+    if (s === undefined) return 'undefined';
+    return s.length > max ? `${s.slice(0, max)}...(${s.length} chars)` : s;
+  };
+
   let lastTurnError = '';
   const unsubscribe = observe((event) => {
-    const e = event as unknown as {
-      type: string;
-      message?: string;
-      isError?: boolean;
-      error?: unknown;
-      attributes?: unknown;
-    };
+    const e = event as FlueEvent;
+
     // Any event carrying a serialized error, not just `turn`: a `turn` failure reports `isError` with
     // a null `error`, and the provider's status only appears on the `operation` and
     // `submission_settled` events. Keep the latest, which is the one that ended the attempt.
-    if (e.error) lastTurnError = describeTurnError(e.error);
-    if (e.type === 'tool_start') {
-      toolStarts += 1;
-      if (!hasMaxTurns || !currentAbort) return;
-      // Once the wrap-up is in flight the budget stops applying: the reserve exists so the final
-      // answer can be produced, and submitting it is itself a tool call. `WRAP_UP_TIMEOUT_MS` bounds
-      // this instead — without it the wrap-up aborts itself and the partial answer is lost.
-      if (wrapUpRequested) return;
-      if (toolStarts > maxTurns) {
-        abortedForMaxTurns = true;
-        void currentAbort();
-      } else if (softLimit < maxTurns && toolStarts > softLimit) {
-        wrapUpRequested = true;
-        void currentAbort();
+    if ('error' in e && e.error) lastTurnError = describeTurnError(e.error);
+
+    switch (e.type) {
+      case 'tool_start':
+        toolStarts += 1;
+        debug(() => `[${ctx.runId}] tool_start ${e.toolName} args=${truncate(e.args)}`);
+        if (!hasMaxTurns || !currentAbort) return;
+        // Once the wrap-up is in flight the budget stops applying: the reserve exists so the final
+        // answer can be produced, and submitting it is itself a tool call. `WRAP_UP_TIMEOUT_MS` bounds
+        // this instead — without it the wrap-up aborts itself and the partial answer is lost.
+        if (wrapUpRequested) return;
+        if (toolStarts > maxTurns) {
+          abortedForMaxTurns = true;
+          void currentAbort();
+        } else if (softLimit < maxTurns && toolStarts > softLimit) {
+          wrapUpRequested = true;
+          void currentAbort();
+        }
+        return;
+      case 'tool':
+        debug(
+          () =>
+            `[${ctx.runId}] tool ${e.toolName} ${e.isError ? 'failed' : 'ok'} in ${e.durationMs}ms result=${truncate(e.result)}`,
+        );
+        return;
+      case 'turn_start':
+        debug(() => `[${ctx.runId}] turn_start ${e.turnId} purpose=${e.purpose} model=${currentModel}`);
+        return;
+      case 'turn': {
+        const usage = e.response.usage;
+        const usageStr = usage
+          ? `in=${usage.input} out=${usage.output} cacheRead=${usage.cacheRead} cacheWrite=${usage.cacheWrite}`
+          : 'no usage';
+        debug(
+          () =>
+            `[${ctx.runId}] turn ${e.turnId} purpose=${e.purpose} model=${e.request.requestedModel} ${e.durationMs}ms ` +
+            `${e.isError ? 'ERROR' : 'ok'} ${usageStr}`,
+        );
+        return;
       }
-      return;
-    }
-    if (e.type === 'log' && typeof e.message === 'string' && e.message.includes('flue:model-retry')) {
-      // A retry is the one place the provider's own reason is on a `log` event rather than on the
-      // `error` field read above, so it needs its own hop out of the attributes. Recorded as
-      // `lastTurnError` too: if the retry itself then fails opaquely, this is what lets the fallback
-      // chain classify the attempt on the failure that actually started it.
-      const detail = retryErrorDetail(e.attributes);
-      if (detail) {
-        lastTurnError = detail;
-        log(`model retry: ${detail}`);
-      }
-      postRateLimited({ mode: input.mode, provider: providerOf(currentModel), switching: false });
+      case 'task_start':
+        debug(() => `[${ctx.runId}] task_start ${e.taskId} agent=${e.agent ?? '(default)'} prompt=${truncate(e.prompt, 200)}`);
+        return;
+      case 'task':
+        debug(() => `[${ctx.runId}] task ${e.taskId} agent=${e.agent ?? '(default)'} ${e.durationMs}ms ${e.isError ? 'ERROR' : 'ok'}`);
+        return;
+      case 'compaction_start':
+        log(`[${ctx.runId}] compaction started: reason=${e.reason} estimatedTokens=${e.estimatedTokens}`);
+        return;
+      case 'compaction':
+        log(
+          `[${ctx.runId}] compaction finished: ${e.messagesBefore}→${e.messagesAfter} messages in ${e.durationMs}ms` +
+            (e.isError ? ` ERROR ${truncate(e.error)}` : ''),
+        );
+        return;
+      case 'submission_settled':
+        if (e.outcome !== 'completed') {
+          warn(`[${ctx.runId}] submission ${e.submissionId} settled ${e.outcome}: ${e.error?.message ?? '(no message)'}`);
+        } else {
+          debug(() => `[${ctx.runId}] submission ${e.submissionId} settled completed`);
+        }
+        return;
+      case 'submission_recovery':
+        warn(`[${ctx.runId}] submission recovery: ${e.operation} → ${e.outcome}${e.error ? `: ${e.error.message}` : ''}`);
+        return;
+      case 'log':
+        if (typeof e.message === 'string' && e.message.includes('flue:model-retry')) {
+          // A retry is the one place the provider's own reason is on a `log` event rather than on the
+          // `error` field read above, so it needs its own hop out of the attributes. Recorded as
+          // `lastTurnError` too: if the retry itself then fails opaquely, this is what lets the fallback
+          // chain classify the attempt on the failure that actually started it.
+          const detail = retryErrorDetail(e.attributes);
+          if (detail) {
+            lastTurnError = detail;
+            log(`model retry: ${detail}`);
+          }
+          postRateLimited({ mode: input.mode, provider: providerOf(currentModel), switching: false });
+        } else {
+          debug(() => `[${ctx.runId}] flue log[${e.level}]: ${e.message}`);
+        }
+        return;
+      default:
+        return;
     }
   });
 

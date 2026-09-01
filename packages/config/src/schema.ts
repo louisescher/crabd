@@ -102,6 +102,7 @@ export const PermissionsPartialSchema = v.object({
    * to keep one without the other. Worth locking via `governance.locked` in an org config.
    */
   write: v.optional(v.boolean()),
+  secret_scan: v.optional(v.boolean()),
 });
 export type PermissionsPartial = v.InferOutput<typeof PermissionsPartialSchema>;
 

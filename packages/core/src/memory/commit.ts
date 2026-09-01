@@ -1,6 +1,8 @@
 import type { MemoryWrite } from '@crabd/config';
 import type { ForgeAdapter, ForgeContext } from '../forge/types.ts';
 import { changesForPaths } from '../git/changes.ts';
+import { renderVetFailureMessage, scanForSecrets } from '../git/vet.ts';
+import { debug, warn } from '../logger.ts';
 
 /** Branch a `pr`-target memory commit lands on before its pull request is opened. */
 const MEMORY_BRANCH = 'crabd/memory';
@@ -63,6 +65,7 @@ export interface CommitMemoriesInput {
   write: MemoryWrite;
   /** `config.permissions.write`. An explicit false refuses rather than committing. */
   writesAllowed: boolean;
+  secretScan?: boolean;
 }
 
 export interface CommitMemoriesResult {
@@ -85,16 +88,28 @@ export async function commitMemories(input: CommitMemoriesInput): Promise<Commit
 
   const count = `${paths.length} memor${paths.length === 1 ? 'y' : 'ies'}`;
   if (!input.writesAllowed) {
+    warn(`commitMemories: recorded ${count} but writes are disabled, not committing`);
     return { note: `🧠 Recorded ${count}, but could not commit: writes are turned off for this repository.` };
   }
 
   const target = resolveMemoryTarget(input.write, input.context);
   if (target.kind === 'skip') {
+    warn(`commitMemories: recorded ${count} but skipping, ${target.reason}`);
     return { note: `🧠 Recorded ${count}, but could not commit: ${target.reason}.` };
   }
 
   const changes = changesForPaths(input.sourceRoot, paths);
+
+  if (input.secretScan !== false) {
+    const vet = scanForSecrets(changes);
+    if (!vet.ok) {
+      warn(`commitMemories: blocked ${count}, ${renderVetFailureMessage(vet)}`);
+      return { note: `🧠 Recorded ${count}, but did not commit: ${renderVetFailureMessage(vet)}` };
+    }
+  }
+
   const message = `crab'd: record ${count} from review feedback`;
+  debug(`commitMemories: committing ${count} to ${target.kind === 'pr' ? `${target.branch} (PR into ${target.baseBranch})` : target.branch}`);
 
   try {
     await input.adapter.commitToBranch({
@@ -108,6 +123,7 @@ export async function commitMemories(input: CommitMemoriesInput): Promise<Commit
     return { note: `🧠 Recorded ${count}, but the commit failed: ${detail}` };
   }
 
+  debug(`commitMemories: committed ${count} to ${target.branch}`);
   const list = paths.map((p) => `\`${p}\``).join(', ');
 
   if (target.kind === 'pr') {

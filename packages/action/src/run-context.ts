@@ -11,11 +11,8 @@ import {
   type TrackingComment,
 } from '@crabd/core';
 import type { ResolvedConfig, ResolvedMcpServer, ResolvedReviewVerify, ThinkingLevel } from '@crabd/config';
+import { log } from './logger.ts';
 import { webSearchTools } from './tools/websearch.ts';
-
-function log(message: string): void {
-  process.stderr.write(`[crabd] ${message}\n`);
-}
 
 /** Where the agent posts progress, when the run has a tracking comment to post to. */
 export interface ProgressTarget {
@@ -140,7 +137,7 @@ const recorded: string[] = [];
 /**
  * Where recorded memories are staged: a scratch directory, never the checkout.
  *
- * Writing them into the working tree would put them in front of `collectChanges`, so a mode that
+ * Writing them into the working tree would put them in front of `collectChangesSinceBaseline`, so a mode that
  * commits its working-tree changes (`mention`, `implement`, or any custom mode) would sweep the
  * memory into its own commit — and `commitMemories` would then commit it again, on a different
  * branch. A memory is a side effect of the conversation, not part of the change under review.
@@ -173,8 +170,19 @@ export function rememberTool(): ToolDefinition | undefined {
       'Record a durable fact about THIS REPOSITORY that you got wrong, so future runs do not repeat the mistake.',
       'Call this only when a human has corrected you in the comment you are replying to, and the correction generalizes.',
       '',
+      'Before you call this, re-read the "## What you have learned about this repository" section already in your',
+      'system prompt, if present. Its headings are the exact `name` of each existing memory. If this correction',
+      'refines, narrows, or overturns one of them, call `remember` again with that SAME name, so your entry replaces',
+      'it wholesale, rather than sitting alongside a now-stale one that still has to be reconciled by whoever reads',
+      'the memory directory. Only pick a new name when this is a genuinely different convention.',
+      '',
       'Record: a convention this repo follows deliberately, a pattern that is intentional and should not be flagged,',
       'a project-specific fact that made your finding wrong.',
+      '',
+      'State the memory in the specific terms of what was actually corrected: the exact rule, path segment, or',
+      'pattern from the discussion, not a paraphrase of a fact you already knew. If what you are about to write',
+      'could have been written without reading this conversation, it is too generic: find the narrower, more',
+      'specific rule the human was actually pointing at instead.',
       '',
       'Do NOT record: anything about this one pull request or its diff, a restatement of the code, a general programming',
       'fact true of every codebase, or your own summary of the conversation. If you would not want it read aloud before',
@@ -186,7 +194,10 @@ export function rememberTool(): ToolDefinition | undefined {
     input: v.object({
       name: v.pipe(
         v.string(),
-        v.description('Short kebab-case identifier, e.g. "no-barrel-files". Reusing an existing name replaces it.'),
+        v.description(
+          'Short kebab-case identifier, e.g. "no-barrel-files". Match an existing heading from the memory section ' +
+            'above to replace it, otherwise pick a new one.',
+        ),
       ),
       memory: v.pipe(
         v.string(),

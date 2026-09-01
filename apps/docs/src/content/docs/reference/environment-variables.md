@@ -70,6 +70,18 @@ Read by the provider integrations (not by crab'd directly). Provide the one(s) f
 | `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` | `google-vertex` (Vertex AI, ADC) |
 | *(your `api_key_env`)* | a [custom provider](/providers/#custom-openai-compatible-providers) |
 
+## Logging
+
+| Variable | Description |
+| --- | --- |
+| `CRABD_VERBOSE` | Set to `true` for verbose logs: every tool call (name, args, duration, result), every model turn (purpose, model, duration, token usage), and task/subagent delegation. Off by default, so normal runs log only lifecycle milestones and errors. |
+| `CRABD_DEBUG` | Alias for `CRABD_VERBOSE`. |
+
+Verbose lines are also emitted as GitHub Actions `::debug::` workflow-command annotations, so they
+show up in the Actions UI's debug log view too. The switch that turns them on at all is
+`CRABD_VERBOSE`, though, not GitHub's own `ACTIONS_STEP_DEBUG`/`ACTIONS_RUNNER_DEBUG` secret, which
+many repos never enable.
+
 ## Runner-provided (read automatically)
 
 Set by the CI runner; crab'd reads them. You rarely set these yourself.

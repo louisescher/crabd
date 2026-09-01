@@ -207,15 +207,19 @@ export class ForgejoForge implements ForgeAdapter {
       `${this.prefix}/issues/${target}/comments`,
     );
     const existing = (data ?? []).find((c) => (c.body ?? '').includes(marker));
-    return existing ? { id: existing.id, target } : undefined;
+    return existing ? { id: existing.id, target, body: existing.body } : undefined;
   }
 
   async updateTrackingComment(ref: TrackingComment, body: string): Promise<void> {
     await this.api('PATCH', `${this.prefix}/issues/comments/${ref.id}`, { body });
   }
 
-  async reactToComment(commentId: number, reaction: string): Promise<void> {
+  async reactToComment(commentId: number, reaction: string, _kind?: 'issue' | 'review'): Promise<void> {
     await this.api('POST', `${this.prefix}/issues/comments/${commentId}/reactions`, { content: reaction });
+  }
+
+  async replyToReviewComment(pullNumber: number, commentId: number, body: string): Promise<void> {
+    await this.api('POST', `${this.prefix}/pulls/${pullNumber}/comments/${commentId}/replies`, { body });
   }
 
   async postReview(prNumber: number, review: ReviewSubmission): Promise<void> {
