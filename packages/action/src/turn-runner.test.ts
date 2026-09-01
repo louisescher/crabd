@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { classifyModelError } from '@crabd/core';
-import { describeTurnError, isHarnessRecoveryFailure, retryErrorDetail } from './turn-runner.ts';
+import { describeFatal, describeTurnError, isHarnessRecoveryFailure, retryErrorDetail } from './turn-runner.ts';
 
 /**
  * The pairing these tests protect: `handle.read()` rejects with an `AgentRunError` carrying only
@@ -77,6 +77,43 @@ describe('retryErrorDetail', () => {
     expect(retryErrorDetail({ attempt: 1 })).toBe('');
     expect(retryErrorDetail(undefined)).toBe('');
     expect(retryErrorDetail('not an object')).toBe('');
+  });
+});
+
+/**
+ * The heap watchdog aborts the same way the max-turns budget does: a flag read out here, not
+ * classified from the abort's message. Both flags have to be checked, in the right order, so the
+ * tracking comment explains the actual reason instead of a generic error.
+ */
+describe('describeFatal', () => {
+  it('classifies a resource-exhaustion abort ahead of everything else', () => {
+    expect(describeFatal('crabd: aborted', true, true, 40, 60_000)).toEqual({
+      kind: 'resource_exhausted',
+      message: 'crabd: aborted',
+    });
+  });
+
+  it('classifies a max_turns abort, carrying the configured ceiling', () => {
+    expect(describeFatal('crabd: max_turns (40) exceeded', true, false, 40)).toEqual({
+      kind: 'max_turns',
+      message: 'crabd: max_turns (40) exceeded',
+      maxTurns: 40,
+    });
+  });
+
+  it('classifies a timeout by message content, carrying the configured minutes', () => {
+    expect(describeFatal('the operation timed out', false, false, undefined, 120_000)).toEqual({
+      kind: 'timeout',
+      message: 'the operation timed out',
+      timeoutMinutes: 2,
+    });
+  });
+
+  it('falls back to a generic error for anything else', () => {
+    expect(describeFatal('crabd: the model never called submit', false, false)).toEqual({
+      kind: 'error',
+      message: 'crabd: the model never called submit',
+    });
   });
 });
 

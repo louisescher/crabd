@@ -6,7 +6,7 @@ import type { WorkspaceState } from '../git/workspace.ts';
 import { describeCommentableLines, type AnchorableFile } from './diff-lines.ts';
 import { splitSections } from './diff-parse.ts';
 import type { ProjectContext } from './project.ts';
-import { FINDING_MARKER, TRACKING_MARKER } from '../report/tracking.ts';
+import { FINDING_MARKER, MEMORY_MARKER, TRACKING_MARKER } from '../report/tracking.ts';
 import type { TriggerResult } from '../trigger/detect.ts';
 
 /** Built-in base system prompt per non-review built-in mode. Overridable via full prompt override. */
@@ -857,7 +857,7 @@ function renderContext(
     // Label crab'd's own prior replies so the model has conversational continuity.
     const recent = recentComments
       .map((c) => {
-        const isCrabd = c.body.includes(TRACKING_MARKER);
+        const isCrabd = c.body.includes(TRACKING_MARKER) || c.body.includes(MEMORY_MARKER);
         const who = isCrabd ? "crab'd (you, earlier)" : c.author;
         const body = truncate(stripMarkers(c.body), COMMENT_BODY_BUDGET);
         return `**${who}:** ${body}`;
@@ -905,7 +905,9 @@ function renderReplyThread(thread: ForgeContext['replyThread'], triggerId: numbe
         // the marker. Re-deriving the root from its body here would disagree with the gate that
         // decided this thread was crab'd's in the first place.
         const isCrabd =
-          c.id === rootId ? thread.rootIsCrabd : c.body.includes(FINDING_MARKER) || c.body.includes(TRACKING_MARKER);
+          c.id === rootId
+            ? thread.rootIsCrabd
+            : c.body.includes(FINDING_MARKER) || c.body.includes(TRACKING_MARKER) || c.body.includes(MEMORY_MARKER);
         const who = isCrabd ? "crab'd (you, earlier)" : c.author;
         const body = truncate(stripMarkers(c.body), COMMENT_BODY_BUDGET);
         return `**${who}:** ${body}`;
@@ -919,7 +921,7 @@ function renderReplyThread(thread: ForgeContext['replyThread'], triggerId: numbe
 
 /** Drop crab'd's hidden comment markers so they never reach the model as content. */
 function stripMarkers(body: string): string {
-  return body.split(FINDING_MARKER).join('').split(TRACKING_MARKER).join('').trim();
+  return body.split(FINDING_MARKER).join('').split(TRACKING_MARKER).join('').split(MEMORY_MARKER).join('').trim();
 }
 
 export interface AssembleOptions {

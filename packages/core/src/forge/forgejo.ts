@@ -201,12 +201,12 @@ export class ForgejoForge implements ForgeAdapter {
     return { id: data?.id ?? 0, target };
   }
 
-  async findTrackingComment(target: number): Promise<TrackingComment | undefined> {
+  async findTrackingComment(target: number, marker: string = TRACKING_MARKER): Promise<TrackingComment | undefined> {
     const { data } = await this.api<{ id: number; body?: string }[]>(
       'GET',
       `${this.prefix}/issues/${target}/comments`,
     );
-    const existing = (data ?? []).find((c) => (c.body ?? '').includes(TRACKING_MARKER));
+    const existing = (data ?? []).find((c) => (c.body ?? '').includes(marker));
     return existing ? { id: existing.id, target } : undefined;
   }
 

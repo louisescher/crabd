@@ -199,7 +199,7 @@ export class GitHubForge implements ForgeAdapter {
     return { id: data.id, target };
   }
 
-  async findTrackingComment(target: number): Promise<TrackingComment | undefined> {
+  async findTrackingComment(target: number, marker: string = TRACKING_MARKER): Promise<TrackingComment | undefined> {
     const gh = await this.gh();
     const { data } = await gh.issues.listComments({
       owner: this.owner,
@@ -207,7 +207,7 @@ export class GitHubForge implements ForgeAdapter {
       issue_number: target,
       per_page: 100,
     });
-    const existing = data.find((c) => (c.body ?? '').includes(TRACKING_MARKER));
+    const existing = data.find((c) => (c.body ?? '').includes(marker));
     return existing ? { id: existing.id, target } : undefined;
   }
 

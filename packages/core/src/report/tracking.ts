@@ -10,6 +10,14 @@ export const TRACKING_MARKER = '<!-- crabd:tracking -->';
  */
 export const FINDING_MARKER = '<!-- crabd:finding -->';
 
+/**
+ * Hidden marker on crab'd's dedicated memory comment, for sticky reuse across runs, same idea as
+ * {@link TRACKING_MARKER} but a distinct marker: a memory comment must never satisfy
+ * `findTrackingComment(target, TRACKING_MARKER)` or the broad "already commented here" gate in
+ * `isCorrectionReply`, both of which key on `TRACKING_MARKER` alone.
+ */
+export const MEMORY_MARKER = '<!-- crabd:memory -->';
+
 /** Base URL of the crab'd documentation site, for the actionable links in failure comments. */
 const DOCS_BASE = 'https://crabd.lou.gg';
 
@@ -170,8 +178,18 @@ export function renderResult(branding: CommentContext, render: ResultRender): st
   return parts.join('\n') + footer(branding);
 }
 
+/**
+ * crab'd's dedicated memory comment: `commitMemories`'s outcome note (committed, skipped, or failed,
+ * already carrying its own 🧠 lead, see `commit.ts`), on its own comment rather than folded into the
+ * pinned tracking comment. Ends with {@link MEMORY_MARKER}, not {@link TRACKING_MARKER}. It's
+ * deliberately not built from {@link footer}, which always embeds the latter.
+ */
+export function renderMemoryNote(note: string): string {
+  return `${note.trim()}\n${MEMORY_MARKER}`;
+}
+
 /** The classes of terminal failure crab'd can post a tailored, actionable comment for. */
-export type FailureKind = 'max_turns' | 'timeout' | 'config' | 'network' | 'error';
+export type FailureKind = 'max_turns' | 'timeout' | 'resource_exhausted' | 'config' | 'network' | 'error';
 
 export interface FailureRender {
   mode: string;
@@ -222,6 +240,12 @@ export function renderFailure(branding: CommentContext, render: FailureRender): 
       lead = `⚠️ **${name}** ran out of time while ${verb} — the run exceeded its${limit} time limit.`;
       tip = `**What to change:** raise \`limits.timeout_minutes\`, or narrow the request so it finishes within the limit.`;
       docs = `[Troubleshooting → run timed out](${DOCS_BASE}/troubleshooting/#run-timed-out)`;
+      break;
+    }
+    case 'resource_exhausted': {
+      lead = `⚠️ **${name}** ran out of memory while ${verb}. Its heap usage hit the safety limit before it could finish.`;
+      tip = `This usually means the task pulled in unusually large inputs: a very large diff, huge files, or a long-running conversation. **What to change:** narrow the request, split a large PR into smaller ones, or turn off \`context.full_diff\` if it's on.`;
+      docs = `[Troubleshooting → run ran out of memory](${DOCS_BASE}/troubleshooting/#run-ran-out-of-memory)`;
       break;
     }
     case 'config': {

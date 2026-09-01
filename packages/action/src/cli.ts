@@ -103,7 +103,13 @@ function runUrlFromEnv(): string | undefined {
 }
 
 /** Failure kinds crab'd renders a tailored comment for; anything else falls back to `error`. */
-const TAILORED_FAILURE_KINDS: readonly FailureKind[] = ['max_turns', 'timeout', 'config', 'network'];
+const TAILORED_FAILURE_KINDS: readonly FailureKind[] = [
+  'max_turns',
+  'timeout',
+  'resource_exhausted',
+  'config',
+  'network',
+];
 function toFailureKind(kind: string): FailureKind {
   return (TAILORED_FAILURE_KINDS as readonly string[]).includes(kind) ? (kind as FailureKind) : 'error';
 }

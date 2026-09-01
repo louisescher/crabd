@@ -61,6 +61,27 @@ limits:
 If runs routinely approach the limit, also consider narrowing the request (see above) or a faster
 model for the mode.
 
+## Run ran out of memory
+
+> **crab'd** ran out of memory while ... Its heap usage hit the safety limit before it could finish.
+
+A watchdog samples crab'd's own process heap while a turn runs. If usage climbs past a safety
+threshold, crab'd aborts the turn itself and reports it here, rather than letting the process
+hard-crash, which would leave the tracking comment stuck on "working..." with no explanation. This is
+a safety valve, not a user-configurable limit: there's no `limits.*` knob for it, the same way there
+isn't one for the turn or timeout ceilings' underlying mechanism.
+
+Common causes:
+
+- **An unusually large diff or file** was pulled into the prompt (see `context.full_diff`).
+- **A long-running conversation** kept growing turn over turn without producing an answer.
+
+What to change:
+
+1. **Narrow the request**, or split a large PR into smaller ones.
+2. **Turn off `context.full_diff`** if it's on: a compressed diff uses far less of the budget this
+   is protecting.
+
 ## Rate limited
 
 > **crab'd** … every model was rate-limited …

@@ -1,3 +1,4 @@
+import { getHeapStatistics } from 'node:v8';
 import { init, observe, type JsonValue } from '@flue/runtime';
 import {
   buildAttemptChain,
@@ -53,6 +54,28 @@ function log(message: string): void {
   process.stderr.write(`[crabd] ${message}\n`);
 }
 
+/** Like {@link log}, but also surfaces the message as a GitHub Actions warning annotation. */
+function warn(message: string): void {
+  if (process.env.GITHUB_ACTIONS === 'true') process.stdout.write(`::warning::[crabd] ${message}\n`);
+  process.stderr.write(`[crabd] ${message}\n`);
+}
+
+/** How often the heap watchdog samples usage. */
+const HEAP_CHECK_INTERVAL_MS = 5_000;
+/** Heap usage ratio at which the watchdog logs a one-time warning. */
+const HEAP_WARN_RATIO = 0.75;
+/** Heap usage ratio at which the watchdog aborts the current attempt rather than let V8 OOM-crash. */
+const HEAP_ABORT_RATIO = 0.92;
+
+function heapUsageRatio(): { ratio: number; usedMb: number; limitMb: number } {
+  const { used_heap_size, heap_size_limit } = getHeapStatistics();
+  return {
+    ratio: used_heap_size / heap_size_limit,
+    usedMb: Math.round(used_heap_size / 1_048_576),
+    limitMb: Math.round(heap_size_limit / 1_048_576),
+  };
+}
+
 export interface TurnInput {
   mode: string;
   message: string;
@@ -75,12 +98,14 @@ interface AttemptResult {
   partial?: boolean;
 }
 
-function describeFatal(
+export function describeFatal(
   message: string,
   maxTurnsHit: boolean,
+  resourceExhausted: boolean,
   maxTurns?: number,
   timeoutMs?: number,
 ): Record<string, JsonValue> {
+  if (resourceExhausted) return { kind: 'resource_exhausted', message };
   if (maxTurnsHit) return { kind: 'max_turns', message, ...(maxTurns ? { maxTurns } : {}) };
   const m = message.toLowerCase();
   if (m.includes('timeout') || m.includes('timed out')) {
@@ -214,6 +239,30 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
   let currentAbort: (() => Promise<void>) | undefined;
   let abortedForMaxTurns = false;
   let wrapUpRequested = false;
+
+  // A tool-call ceiling says nothing about how much heap a single turn's own context/output grows
+  // by. A runaway turn can hit no tool at all and still climb straight to a V8 OOM crash, which is
+  // a hard process abort (not a catchable rejection): no comment update, no cleanup, no log line
+  // beyond V8's own stack dump. Sampling heap usage and aborting the attempt ourselves, well before
+  // that ceiling, is what turns that into a reported failure instead of a silently stuck "working..."
+  // comment. See `describeFatal` below for how this becomes a `resource_exhausted` outcome.
+  let abortedForResourceLimit = false;
+  let heapWarned = false;
+  const heapWatchdog = setInterval(() => {
+    const { ratio, usedMb, limitMb } = heapUsageRatio();
+    if (ratio >= HEAP_ABORT_RATIO) {
+      if (abortedForResourceLimit) return;
+      abortedForResourceLimit = true;
+      warn(
+        `heap usage hit ${Math.round(ratio * 100)}% of the limit (${usedMb} MB / ${limitMb} MB). ` +
+          'Aborting this attempt before it crashes the process.',
+      );
+      void currentAbort?.();
+    } else if (ratio >= HEAP_WARN_RATIO && !heapWarned) {
+      heapWarned = true;
+      log(`heap usage at ${Math.round(ratio * 100)}% of the limit (${usedMb} MB / ${limitMb} MB)`);
+    }
+  }, HEAP_CHECK_INTERVAL_MS);
 
   let lastTurnError = '';
   const unsubscribe = observe((event) => {
@@ -408,8 +457,8 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
       backoff: rl.backoff,
       maxWaitMs,
       runOnce,
-      // A deliberate max_turns abort must not be mistaken for a rate limit.
-      isFatal: () => abortedForMaxTurns,
+      // A deliberate max_turns or resource-limit abort must not be mistaken for a rate limit.
+      isFatal: () => abortedForMaxTurns || abortedForResourceLimit,
       onSwitch: ({ fromModel, nextModel, attempt, waitMs }) => {
         postRateLimited(
           {
@@ -426,8 +475,18 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: describeFatal(message, abortedForMaxTurns, hasMaxTurns ? maxTurns : undefined, ctx.timeoutMs) };
+    return {
+      ok: false,
+      error: describeFatal(
+        message,
+        abortedForMaxTurns,
+        abortedForResourceLimit,
+        hasMaxTurns ? maxTurns : undefined,
+        ctx.timeoutMs,
+      ),
+    };
   } finally {
+    clearInterval(heapWatchdog);
     unsubscribe();
   }
 

@@ -13,6 +13,10 @@ import {
 import type { ResolvedConfig, ResolvedMcpServer, ResolvedReviewVerify, ThinkingLevel } from '@crabd/config';
 import { webSearchTools } from './tools/websearch.ts';
 
+function log(message: string): void {
+  process.stderr.write(`[crabd] ${message}\n`);
+}
+
 /** Where the agent posts progress, when the run has a tracking comment to post to. */
 export interface ProgressTarget {
   adapter: ForgeAdapter;
@@ -203,11 +207,14 @@ export function rememberTool(): ToolDefinition | undefined {
           dir: memory.dir,
         });
         if (!recorded.includes(path)) recorded.push(path);
+        log(`remember: recorded "${data.name}" (${data.memory.length} chars) at ${path}`);
         return { output: { recorded: path } };
       } catch (error) {
         // Report the failure to the model rather than throwing: it can decide whether to retry with
         // a different name, and a failed memory must never take the answer down with it.
-        return { output: { error: error instanceof Error ? error.message : String(error) } };
+        const message = error instanceof Error ? error.message : String(error);
+        log(`remember: failed to record "${data.name}": ${message}`);
+        return { output: { error: message } };
       }
     },
   });

@@ -181,8 +181,12 @@ export interface ForgeAdapter {
   /** Post the initial "crab'd is working..." comment. */
   createTrackingComment(target: number, body: string): Promise<TrackingComment>;
 
-  /** Find an existing crab'd tracking comment on the subject (by hidden marker), if any. */
-  findTrackingComment(target: number): Promise<TrackingComment | undefined>;
+  /**
+   * Find an existing crab'd comment on the subject by hidden marker, if any: `TRACKING_MARKER` for
+   * the pinned tracking comment (the default), or a different marker (e.g. `MEMORY_MARKER`) to find
+   * crab'd's other sticky comments on the same subject.
+   */
+  findTrackingComment(target: number, marker?: string): Promise<TrackingComment | undefined>;
 
   /** Add a reaction (e.g. `eyes`) to a comment — a fast acknowledgment of a trigger. */
   reactToComment(commentId: number, reaction: ForgeReaction): Promise<void>;

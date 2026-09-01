@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_BRANDING,
+  MEMORY_MARKER,
   renderError,
   renderFailure,
+  renderMemoryNote,
   renderProgress,
   renderRateLimitExhausted,
   renderResult,
@@ -90,6 +92,15 @@ describe('renderFailure — helpful, kind-aware errors', () => {
     expect(body).toContain('https://crabd.lou.gg/troubleshooting/#run-timed-out');
   });
 
+  it('explains a heap-exhaustion abort and links its own troubleshooting anchor', () => {
+    const body = renderFailure(custom, { mode: 'mention', kind: 'resource_exhausted' });
+    expect(body).toContain('ran out of memory');
+    expect(body).toContain('heap usage hit the safety limit');
+    expect(body).toContain('https://crabd.lou.gg/troubleshooting/#run-ran-out-of-memory');
+    expect(body).toMatch(/^⚠️ \*\*DevBot\*\*/);
+    expect(body.endsWith(TRACKING_MARKER)).toBe(true);
+  });
+
   it('renders a retry hint when a trigger phrase is given', () => {
     const body = renderFailure(custom, { mode: 'mention', kind: 'error', triggerPhrase: '/crabd' });
     expect(body).toContain('comment `/crabd` to try again');
@@ -173,5 +184,14 @@ describe('advisories', () => {
     expect(body).toContain('[!WARNING]');
     expect(body).not.toContain('posted by');
     expect(body.trimEnd().endsWith(TRACKING_MARKER)).toBe(true);
+  });
+});
+
+describe('renderMemoryNote', () => {
+  it('carries the note verbatim and ends with the memory marker, not the tracking one', () => {
+    const body = renderMemoryNote("🧠 Recorded 1 memory (`.crabd/memory/no-barrel-files.md`) on `main`.");
+    expect(body).toContain('🧠 Recorded 1 memory');
+    expect(body.endsWith(MEMORY_MARKER)).toBe(true);
+    expect(body).not.toContain(TRACKING_MARKER);
   });
 });

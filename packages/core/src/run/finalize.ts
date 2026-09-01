@@ -2,7 +2,7 @@ import type { ResolvedConfig } from '@crabd/config';
 import type { ForgeAdapter, ForgeContext, ForgeEvent } from '../forge/types.ts';
 import { commitMemories } from '../memory/commit.ts';
 import { getMode, type FinalizeResult } from '../modes/registry.ts';
-import { renderFailure, renderResult, type FailureRender } from '../report/tracking.ts';
+import { MEMORY_MARKER, renderFailure, renderMemoryNote, renderResult, type FailureRender } from '../report/tracking.ts';
 import type { TriggerResult } from '../trigger/detect.ts';
 import type { RunPlan } from './prepare.ts';
 
@@ -65,14 +65,23 @@ export async function finalizeRun(input: FinalizeInput): Promise<FinalizeResult>
       // Use the mode's short tracking text when it posted its detail elsewhere (e.g. a PR review).
       renderResult(plan.branding, {
         mode: plan.mode,
-        summary: memory.note
-          ? `${result.trackingComment ?? result.summary}\n\n${memory.note}`
-          : (result.trackingComment ?? result.summary),
+        summary: result.trackingComment ?? result.summary,
         prUrl: result.prUrl,
         ...(note ? { note } : {}),
       }),
     );
-    return memory.note ? { ...result, summary: `${result.summary}\n\n${memory.note}` } : result;
+
+    // Memory gets its own sticky comment rather than riding along on the pinned one, so the mode's
+    // answer and what crab'd learned don't compete for the same space, and so a later run's memory
+    // note updates this comment in place instead of piling onto the main one.
+    if (memory.note) {
+      const body = renderMemoryNote(memory.note);
+      const existing = await adapter.findTrackingComment(plan.subject, MEMORY_MARKER);
+      if (existing) await adapter.updateTrackingComment(existing, body);
+      else await adapter.createTrackingComment(plan.subject, body);
+    }
+
+    return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await adapter.updateTrackingComment(
