@@ -1,5 +1,13 @@
 # @crabd/action
 
+## 1.2.1
+
+### Patch Changes
+
+- Updated dependencies [d7af570]
+  - @crabd/core@1.2.1
+  - @crabd/config@1.2.1
+
 ## 1.2.0
 
 ### Minor Changes

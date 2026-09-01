@@ -1,5 +1,12 @@
 # @crabd/core
 
+## 1.2.1
+
+### Patch Changes
+
+- d7af570: The memory gate no longer skips a review-comment reply just because the thread was started by a human rather than one of crab'd's own findings, as long as crab'd already has a tracking comment on the subject. That case previously left `remember` unmounted, so a direct "remember this" request got a confirmation in the reply text with no memory actually recorded.
+  - @crabd/config@1.2.1
+
 ## 1.2.0
 
 ### Minor Changes
