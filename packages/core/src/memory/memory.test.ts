@@ -204,9 +204,18 @@ describe('isCorrectionReply', () => {
     expect(isCorrectionReply(context, event)).toBe(true);
   });
 
-  it('is false for a reply in a thread a human started', () => {
+  it('is false for a reply in a thread a human started, when crab\'d has not spoken on the subject', () => {
     const context = { ...ctx({}), replyThread: { path: 'a.ts', comments: [], rootIsCrabd: false } };
     expect(isCorrectionReply(context, event)).toBe(false);
+  });
+
+  it('is true for a reply in a thread a human started, when crab\'d already has a tracking comment on the subject', () => {
+    const context = {
+      ...ctx({}),
+      replyThread: { path: 'a.ts', comments: [], rootIsCrabd: false },
+      comments: [{ id: 1, body: `working...${TRACKING_MARKER}`, author: 'crabd', createdAt: '2026-08-12T11:00:00Z' }],
+    };
+    expect(isCorrectionReply(context, event)).toBe(true);
   });
 
   it('is true for an issue comment where crab\'d already spoke', () => {
