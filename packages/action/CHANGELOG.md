@@ -1,5 +1,24 @@
 # @crabd/action
 
+## 1.2.0
+
+### Minor Changes
+
+- 3812e05: Scan every commit and memory write for secrets with gitleaks before it reaches the forge, blocking the write on a finding. New `permissions.secret_scan` config field, on by default.
+- 3812e05: Add `CRABD_VERBOSE`/`CRABD_DEBUG` for per-tool-call, per-turn, and task/compaction logs that were previously dropped entirely.
+
+### Patch Changes
+
+- 3812e05: The `remember` tool now checks existing memories before writing and states the specific correction instead of a generic paraphrase, and a memory-eligible reply gets the same surrounding file content review mode already sends.
+- Updated dependencies [3812e05]
+- Updated dependencies [3812e05]
+- Updated dependencies [3812e05]
+- Updated dependencies [3812e05]
+- Updated dependencies [3812e05]
+- Updated dependencies [3812e05]
+  - @crabd/core@1.2.0
+  - @crabd/config@1.2.0
+
 ## 1.1.0
 
 ### Minor Changes
