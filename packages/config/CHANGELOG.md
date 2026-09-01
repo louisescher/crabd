@@ -1,5 +1,11 @@
 # @crabd/config
 
+## 1.2.0
+
+### Minor Changes
+
+- 3812e05: Scan every commit and memory write for secrets with gitleaks before it reaches the forge, blocking the write on a finding. New `permissions.secret_scan` config field, on by default.
+
 ## 1.1.0
 
 ## 1.0.3

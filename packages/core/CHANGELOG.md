@@ -1,5 +1,21 @@
 # @crabd/core
 
+## 1.2.0
+
+### Minor Changes
+
+- 3812e05: Scan every commit and memory write for secrets with gitleaks before it reaches the forge, blocking the write on a finding. New `permissions.secret_scan` config field, on by default.
+- 3812e05: Add `CRABD_VERBOSE`/`CRABD_DEBUG` for per-tool-call, per-turn, and task/compaction logs that were previously dropped entirely.
+
+### Patch Changes
+
+- 3812e05: Commits and memory writes now only include what changed during the run, never files that were already dirty or untracked in the checkout before it started. Fixes a leak where an ambient file written by an earlier CI step (a credentials file, say) could get swept into a commit.
+- 3812e05: Detect when the same triggering comment dispatches a run twice and skip the second one before any write happens.
+- 3812e05: The `remember` tool now checks existing memories before writing and states the specific correction instead of a generic paraphrase, and a memory-eligible reply gets the same surrounding file content review mode already sends.
+- 3812e05: Fix the eyes reaction 404ing on inline review-comment triggers, and thread mention/memory replies inside the originating review comment instead of posting a new top-level PR comment.
+- Updated dependencies [3812e05]
+  - @crabd/config@1.2.0
+
 ## 1.1.0
 
 ### Minor Changes
