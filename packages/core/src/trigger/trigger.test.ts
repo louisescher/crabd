@@ -97,6 +97,11 @@ describe('detectTrigger — comments', () => {
     });
     expect(t).toBeNull();
   });
+
+  it('a deleted comment never triggers, even carrying the trigger phrase in its body', () => {
+    const deleted: ForgeEvent = { ...commentEvent('@crabd please fix the flaky test'), action: 'deleted' };
+    expect(detectTrigger(deleted, { triggerPhrase: '@crabd', enabledModes: ALL_MODES })).toBeNull();
+  });
 });
 
 describe('detectTrigger — non-comment events', () => {

@@ -60,7 +60,9 @@ function splitModeKeyword(rest: string, modes: ReadonlySet<string>): { mode?: st
  * Rules:
  * - A comment containing the trigger phrase → `mention`, unless it starts with a
  *   mode keyword (`review`/`implement`), which selects that mode. Remaining text
- *   becomes `userInstruction`.
+ *   becomes `userInstruction`. Never on a `deleted` comment: GitHub and Forgejo both
+ *   still report the removed comment's `body` on that action, so a webhook subscribed
+ *   to more than `created` would otherwise replay a mention that no longer exists.
  * - A pull_request opened/reopened/ready_for_review → `review` (NOT on every push/update),
  *   unless the PR is still a draft. A mention in a draft PR still works.
  * - An issue opened/assigned/labeled → `implement`.
@@ -70,6 +72,7 @@ export function detectTrigger(event: ForgeEvent, options: DetectOptions): Trigge
     options.enabledModes.has(result.mode) ? result : null;
 
   if (event.comment) {
+    if (event.action === 'deleted') return null;
     const rest = afterPhrase(event.comment.body, options.triggerPhrase);
     if (rest === null) return null;
     const { mode, instruction } = splitModeKeyword(rest, options.knownModes ?? options.enabledModes);
