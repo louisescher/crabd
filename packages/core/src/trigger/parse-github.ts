@@ -4,7 +4,9 @@ import type {
   ForgeIssue,
   ForgePullRequest,
   ForgeRepo,
+  ForgeReview,
 } from '../forge/types.ts';
+import { normalizeReviewState } from '../forge/checks.ts';
 
 // Minimal structural views of the GitHub webhook payload — parsed defensively so
 // Forgejo's GitHub-compatible payloads flow through the same path.
@@ -37,9 +39,16 @@ interface RawIssue {
   pull_request?: unknown;
 }
 interface RawPull extends RawIssue {
-  head?: { ref?: string; sha?: string; repo?: { fork?: boolean } };
+  head?: { ref?: string; sha?: string; repo?: { fork?: boolean; full_name?: string } };
   base?: { ref?: string };
   draft?: boolean;
+}
+interface RawReview {
+  id?: number;
+  state?: string;
+  body?: string | null;
+  user?: RawUser;
+  submitted_at?: string;
 }
 interface RawPayload {
   action?: string;
@@ -48,17 +57,30 @@ interface RawPayload {
   comment?: RawComment;
   issue?: RawIssue;
   pull_request?: RawPull;
+  review?: RawReview;
 }
 
 const EVENT_KINDS: Record<string, ForgeEventKind> = {
   issue_comment: 'issue_comment',
   pull_request_review_comment: 'pull_request_review_comment',
+  pull_request_review: 'pull_request_review',
   issues: 'issues',
   pull_request: 'pull_request',
 };
 
+function normalizeReview(raw: RawReview, fallbackAuthor: string): ForgeReview {
+  return {
+    id: raw.id ?? 0,
+    state: normalizeReviewState(raw.state),
+    body: raw.body ?? '',
+    author: raw.user?.login ?? fallbackAuthor,
+    submittedAt: raw.submitted_at ?? '',
+  };
+}
+
 /** Recover the kind from the payload when the event name is unusable. Null if it matches nothing. */
 function inferKindFromPayload(p: RawPayload): ForgeEventKind | null {
+  if (p.review && p.pull_request && !p.comment) return 'pull_request_review';
   if (p.comment) {
     if (p.pull_request) return 'pull_request_review_comment';
     if (p.issue) return 'issue_comment';
@@ -85,13 +107,15 @@ function normalizeIssue(raw: RawIssue): ForgeIssue {
   };
 }
 
-function normalizePull(raw: RawPull): ForgePullRequest {
+function normalizePull(raw: RawPull, baseRepoSlug: string): ForgePullRequest {
+  const headRepoSlug = raw.head?.repo?.full_name;
   return {
     ...normalizeIssue(raw),
     headRef: raw.head?.ref ?? '',
     baseRef: raw.base?.ref ?? '',
     headSha: raw.head?.sha ?? '',
-    fromFork: raw.head?.repo?.fork ?? false,
+    ...(headRepoSlug ? { headRepoSlug } : {}),
+    fromFork: headRepoSlug ? headRepoSlug !== baseRepoSlug : (raw.head?.repo?.fork ?? false),
     isDraft: raw.draft ?? false,
   };
 }
@@ -149,8 +173,21 @@ export function parseGitHubEvent(eventName: string, payload: unknown, forge: 'gi
     };
   }
 
+  if (p.review) {
+    const review = normalizeReview(p.review, actorLogin);
+    event.review = review;
+    if (!event.comment) {
+      event.comment = {
+        id: review.id,
+        body: review.body,
+        author: review.author,
+        createdAt: review.submittedAt,
+      };
+    }
+  }
+
   if (p.pull_request) {
-    event.pullRequest = normalizePull(p.pull_request);
+    event.pullRequest = normalizePull(p.pull_request, repo.slug);
   }
 
   if (p.issue) {

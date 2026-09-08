@@ -54,6 +54,7 @@ export interface ForgePullRequest extends ForgeIssue {
   headRef: string;
   baseRef: string;
   headSha: string;
+  headRepoSlug?: string;
   /** Whether the PR originates from a fork (affects write permissions). */
   fromFork: boolean;
   /** Whether the PR is still a draft. Draft PRs are never auto-reviewed. */
@@ -69,7 +70,22 @@ export interface ForgeChangedFile {
 }
 
 /** The raw webhook/event kinds crab'd reacts to, normalized across forges. */
-export type ForgeEventKind = 'issue_comment' | 'pull_request_review_comment' | 'issues' | 'pull_request';
+export type ForgeEventKind =
+  | 'issue_comment'
+  | 'pull_request_review_comment'
+  | 'pull_request_review'
+  | 'issues'
+  | 'pull_request';
+
+export type ForgeReviewState = 'approved' | 'changes_requested' | 'commented' | 'dismissed' | 'pending';
+
+export interface ForgeReview {
+  id: number;
+  state: ForgeReviewState;
+  body: string;
+  author: string;
+  submittedAt: string;
+}
 
 /**
  * A normalized inbound event assembled from the CI event payload (`GITHUB_EVENT_PATH`)
@@ -87,6 +103,7 @@ export interface ForgeEvent {
   pullRequest?: ForgePullRequest;
   /** The comment that triggered the event, when applicable. */
   comment?: ForgeComment;
+  review?: ForgeReview;
   /**
    * True when the subject is a pull request even though only an issue view is
    * present (e.g. an `issue_comment` on a PR). The adapter enriches `pullRequest`
@@ -112,6 +129,38 @@ export interface ForgeContext {
    * timeline, which never contains inline review comments.
    */
   replyThread?: ReviewThread;
+  reviewThreads?: ReviewThreadSummary[];
+  /** Open conversations left out of {@link reviewThreads} by the per-run cap. */
+  omittedThreads?: number;
+  reviews?: ForgeReview[];
+  checks?: ChecksSummary;
+}
+
+export interface ReviewThreadSummary {
+  id: string;
+  rootCommentId: number;
+  path: string;
+  line?: number;
+  diffHunk?: string;
+  isResolved: boolean;
+  isOutdated?: boolean;
+  rootIsCrabd: boolean;
+  comments: { id: number; author: string; body: string; createdAt: string }[];
+}
+
+export type CheckConclusion = 'success' | 'failure' | 'pending' | 'cancelled' | 'skipped' | 'unknown';
+
+export interface CheckSummary {
+  name: string;
+  conclusion: CheckConclusion;
+  url?: string;
+  logTail?: string;
+}
+
+export interface ChecksSummary {
+  available: boolean;
+  reason?: string;
+  checks: CheckSummary[];
 }
 
 /** Handle to a posted tracking comment so it can be updated in place. */
@@ -151,6 +200,12 @@ export interface CommitRequest {
   changes: FileChange[];
   /** Base branch to create `branch` from when it does not yet exist. */
   baseBranch?: string;
+  /**
+   * The commit the branch is expected to be on. When it has moved, the commit is refused: the
+   * changes are whole-file contents read from a checkout of the old tip, so applying them on top
+   * of a newer one would silently revert whatever landed in between.
+   */
+  expectedParentSha?: string;
 }
 
 export interface OpenPrRequest {
@@ -199,6 +254,14 @@ export interface ForgeAdapter {
 
   /** Submit a PR review (summary + optional inline comments). */
   postReview(prNumber: number, review: ReviewSubmission): Promise<void>;
+
+  listReviewThreads(prNumber: number): Promise<ReviewThreadSummary[]>;
+
+  listReviews(prNumber: number): Promise<ForgeReview[]>;
+
+  resolveReviewThread(threadId: string): Promise<boolean>;
+
+  listChecks(sha: string, options?: { logTailBytes?: number }): Promise<ChecksSummary>;
 
   /** Commit file changes to a branch, creating it from `baseBranch` if needed. */
   commitToBranch(request: CommitRequest): Promise<void>;

@@ -113,7 +113,14 @@ export {
   type ReviewOutput,
   type ReviewSeverity,
 } from './modes/review.ts';
-export { implementMode, ImplementOutputSchema, type ImplementOutput } from './modes/implement.ts';
+export {
+  implementMode,
+  ImplementOutputSchema,
+  THREAD_OUTCOMES,
+  type ImplementOutput,
+  type ThreadOutcome,
+  type VerificationRun,
+} from './modes/implement.ts';
 export { commitWorkingChanges, subjectNumber } from './modes/shared.ts';
 
 // Git
@@ -154,6 +161,13 @@ export {
   TRACKING_MARKER,
   FINDING_MARKER,
   MEMORY_MARKER,
+  PR_MARKER,
+  REPLY_MARKER,
+  isCommentHandled,
+  isCrabdAuthored,
+  isRoundHandled,
+  roundMarker,
+  type HandledKind,
   type Branding,
   type CommentContext,
   type FailureKind,
@@ -162,6 +176,18 @@ export {
   type RateLimitExhaustedRender,
   type ResultRender,
 } from './report/tracking.ts';
+
+// Ownership and phases
+export {
+  brandPrBody,
+  DEFAULT_BRANCH_PREFIX,
+  forceBranchPrefix,
+  implementPhase,
+  isCrabdPullRequest,
+  type ImplementPhase,
+} from './forge/ownership.ts';
+export { BranchMovedError } from './forge/commit-guard.ts';
+export { groupReviewThreads } from './forge/review-thread.ts';
 
 // Run orchestration
 export {

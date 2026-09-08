@@ -122,8 +122,15 @@ on:
     types: [opened, reopened, ready_for_review]
   issue_comment:
     types: [created]
+  issues:
+    types: [assigned, labeled]
+  # Harmless where a Forgejo version does not dispatch it, and picked up where one does.
   pull_request_review_comment:
     types: [created]
+
+concurrency:
+  group: crabd-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   crabd:

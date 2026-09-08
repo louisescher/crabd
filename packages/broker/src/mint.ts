@@ -33,12 +33,28 @@ export async function mintInstallationToken(options: MintOptions): Promise<Minte
     repo: options.repo,
   });
 
+  // GitHub rejects the whole mint with 422 when the requested permissions are not a subset of what
+  // the installation granted, so anything optional has to be intersected rather than asked for.
+  // `checks`/`actions` are read only by a feedback round, and an installation that has not accepted
+  // them yet must keep working without the CI context rather than failing every run.
+  const granted = (installation.permissions ?? {}) as Record<string, string | undefined>;
+  const optional = (['checks', 'actions'] as const).reduce<Record<string, 'read'>>((acc, name) => {
+    if (granted[name]) acc[name] = 'read';
+    return acc;
+  }, {});
+
   const auth = createAppAuth({ appId: options.appId, privateKey: options.privateKey });
   const result = await auth({
     type: 'installation',
     installationId: installation.id,
     repositoryNames: [options.repo],
-    permissions: { contents: 'write', issues: 'write', pull_requests: 'write', metadata: 'read' },
+    permissions: {
+      contents: 'write',
+      issues: 'write',
+      pull_requests: 'write',
+      metadata: 'read',
+      ...optional,
+    },
   });
 
   return {

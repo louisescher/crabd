@@ -232,6 +232,59 @@ forge review action):
 crab'd will not approve while a `blocker` or `major` finding stands. A verdict that contradicts the
 findings is downgraded to _request changes_.
 
+## `implement`
+
+Behavior of the `implement` mode: the branches it creates, what verifies a change, and how a
+feedback round on a pull request works. See [Modes](/modes/#implement).
+
+| Field           | Type       | Default   | Description                                                                                                                                        |
+| --------------- | ---------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `branch_prefix` | `string`   | `crabd/`  | Prefix forced onto every branch crab'd creates. Also the fallback signal for "crab'd opened this pull request" when the hidden marker in the description has been edited away. |
+| `verify`        | object     | no commands | Commands that must run before crab'd answers. See [`implement.verify`](#implementverify).                                                          |
+| `rounds`        | object     | on        | Automatic feedback rounds on crab'd's own pull requests. See [`implement.rounds`](#implementrounds).                                               |
+
+### `implement.verify`
+
+| Field      | Type       | Default | Description                                                                                                    |
+| ---------- | ---------- | ------- | -------------------------------------------------------------------------------------------------------------- |
+| `commands` | `string[]` | `[]`    | Commands the agent runs from the repository root before answering, reporting each result. **Accumulates across all layers.** |
+
+```yaml title=".crabd.yml"
+implement:
+  verify:
+    commands:
+      - pnpm typecheck
+      - pnpm test
+```
+
+Each command's outcome is disclosed on the pull request. A failure does not block the commit,
+because the checks on the pull request are the gate that does. The list accumulates, like
+`review.exclusions`, so a command an organization pins cannot be dropped by a repository. Lock it
+with `governance.locked: [implement.verify.commands]` to stop a repository adding to it either.
+
+The agent runs these itself, in the same sandbox it edits the code in. The repository layer of the
+config is read from the checkout, which on a pull request is that pull request's head, so a
+contributor can add a command to this list. The agent already has a shell in that sandbox, so this
+grants no new capability, but pin the list at the organization layer with
+`governance.locked: [implement.verify.commands]` if you would rather a pull request could not add
+to it.
+
+### `implement.rounds`
+
+| Field            | Type      | Default | Description                                                                                                                    |
+| ---------------- | --------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `enabled`        | `boolean` | `true`  | Whether a submitted review or an inline review comment on a pull request crab'd owns starts a round with no trigger phrase.    |
+| `resolve_threads`| `boolean` | `true`  | Whether crab'd resolves the review conversations it fixed. GitHub only.                                                        |
+| `max_threads`    | `number`  | `30`    | Cap on how many open conversations one round is given. The prompt says how many were left out, so the round reports them as unaddressed. |
+
+Both automatic triggers are GitHub-only, because Forgejo Actions has no review events. On Forgejo a
+round starts from `/crabd implement address the review`, and `enabled` has no effect there.
+
+A GitHub round reads the failing checks on the head commit. That needs `checks: read` and
+`actions: read` on the token, which the workflow template requests and the crab'd App installation
+must grant. Without them the round still runs, and the tracking comment says the check state could
+not be read.
+
 ## `web_search`
 
 Gives the agent `web_search` and `fetch_url` tools so it can research current information (library

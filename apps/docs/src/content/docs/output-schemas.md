@@ -23,6 +23,37 @@ v.object({
 });
 ```
 
+And `implement` produces one shape for both of its phases, with `kind` saying which:
+
+```ts
+v.object({
+  kind: v.picklist(['issue', 'round']),
+  summary: v.string(),
+  // the issue phase
+  pr_title: v.optional(v.string()),
+  branch: v.optional(v.string()),
+  pr_body: v.optional(v.string()),
+  // a feedback round
+  commit_message: v.optional(v.string()),
+  threads: v.optional(
+    v.array(
+      v.object({
+        thread_id: v.string(),
+        outcome: v.picklist(['fixed', 'already-fixed', 'partial', 'declined', 'answered', 'unclear']),
+        reply: v.string(),
+      }),
+    ),
+  ),
+  verification: v.optional(
+    v.array(v.object({ command: v.string(), status: v.picklist(['passed', 'failed', 'not-run']) })),
+  ),
+});
+```
+
+The phase-specific fields are optional in the schema and required by the mode's own check, which
+asks the model to correct itself when it answers for the wrong phase or leaves a review
+conversation unanswered.
+
 crab'd validates the model's output against this before doing anything with it. An ill-formed
 response is retried.
 

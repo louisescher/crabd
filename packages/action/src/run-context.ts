@@ -47,6 +47,8 @@ export interface RunContext {
    * at the end would read as a glitch.
    */
   branding: CommentContext;
+  /** Verb key for crab'd's own comments. Falls back to the mode name. */
+  verbKey?: string;
   webSearch: { enabled: boolean; maxResults: number };
   verify: ResolvedReviewVerify;
   mcp: ResolvedMcpServer[];
@@ -101,6 +103,7 @@ export function buildRunContext(input: {
   today?: string;
   /** The plan's branding, carrying any advisories. Falls back to plain `config.appearance`. */
   branding?: CommentContext;
+  verbKey?: string;
 }): RunContext {
   const { config } = input;
   return {
@@ -109,6 +112,7 @@ export function buildRunContext(input: {
     ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     sandboxEnv: input.sandboxEnv ?? {},
     branding: input.branding ?? config.appearance,
+    ...(input.verbKey ? { verbKey: input.verbKey } : {}),
     webSearch: config.webSearch,
     verify: config.review.verify,
     mcp: config.mcp,
@@ -233,7 +237,7 @@ export function rememberTool(): ToolDefinition | undefined {
 
 /** A tool the agent calls to post progress to the tracking comment mid-run. */
 export function progressTool(mode: string): ToolDefinition | undefined {
-  const { progress, branding } = runContext();
+  const { progress, branding, verbKey } = runContext();
   if (!progress) return undefined;
   return defineTool({
     name: 'report_progress',
@@ -242,7 +246,10 @@ export function progressTool(mode: string): ToolDefinition | undefined {
     input: v.object({ message: v.string() }),
     async run({ data }) {
       try {
-        await progress.adapter.updateTrackingComment(progress.tracking, renderProgress(branding, mode, data.message));
+        await progress.adapter.updateTrackingComment(
+          progress.tracking,
+          renderProgress(branding, verbKey ?? mode, data.message),
+        );
       } catch {
         // Progress updates are best-effort.
       }

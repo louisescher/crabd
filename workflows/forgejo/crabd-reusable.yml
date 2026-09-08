@@ -4,6 +4,11 @@ name: crab'd
 on:
   workflow_call:
 
+# One run at a time per issue or pull request. See the note in `crabd.yml`.
+concurrency:
+  group: crabd-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
+
 jobs:
   crabd:
     # Gating on github.event_name never fires here, see the docs link above.

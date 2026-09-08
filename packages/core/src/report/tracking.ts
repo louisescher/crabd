@@ -18,15 +18,35 @@ export const FINDING_MARKER = '<!-- crabd:finding -->';
  */
 export const MEMORY_MARKER = '<!-- crabd:memory -->';
 
+export const PR_MARKER = '<!-- crabd:pr -->';
+
+export const REPLY_MARKER = '<!-- crabd:reply -->';
+
+export const CRABD_MARKERS = [TRACKING_MARKER, FINDING_MARKER, MEMORY_MARKER, PR_MARKER, REPLY_MARKER];
+
+export function isCrabdAuthored(body: string | undefined): boolean {
+  return Boolean(body && CRABD_MARKERS.some((marker) => body.includes(marker)));
+}
+
 /** Base URL of the crab'd documentation site, for the actionable links in failure comments. */
 const DOCS_BASE = 'https://crabd.lou.gg';
 
-function handledMarker(commentId: number): string {
-  return `<!-- crabd:handled:${commentId} -->`;
+function handledMarker(id: number, kind: HandledKind = 'comment'): string {
+  return kind === 'comment' ? `<!-- crabd:handled:${id} -->` : `<!-- crabd:handled:${kind}:${id} -->`;
 }
 
-export function isCommentHandled(body: string | undefined, commentId: number): boolean {
-  return Boolean(body?.includes(handledMarker(commentId)));
+export type HandledKind = 'comment' | 'review' | 'review_comment';
+
+export function isCommentHandled(body: string | undefined, id: number, kind: HandledKind = 'comment'): boolean {
+  return Boolean(body?.includes(handledMarker(id, kind)));
+}
+
+export function roundMarker(headSha: string, feedbackToken: string): string {
+  return `<!-- crabd:round:${headSha}:${feedbackToken} -->`;
+}
+
+export function isRoundHandled(body: string | undefined, headSha: string, feedbackToken: string): boolean {
+  return Boolean(body?.includes(roundMarker(headSha, feedbackToken)));
 }
 
 /** How crab'd presents itself in a tracking comment: the display name, brand emoji, footer. */
@@ -58,6 +78,8 @@ export interface CommentContext extends Branding {
    */
   advisories?: string[];
   handledCommentId?: number;
+  handledKind?: HandledKind;
+  roundClaim?: { headSha: string; feedbackToken: string };
 }
 
 /** The emoji prefix (`🦀 `) for a comment lead, or `''` when no emoji is configured. */
@@ -86,15 +108,18 @@ function advisoryBlock(b: CommentContext): string {
  */
 function footer(b: CommentContext): string {
   const advisory = advisoryBlock(b);
-  const handled = b.handledCommentId !== undefined ? `\n${handledMarker(b.handledCommentId)}` : '';
-  if (!b.footer) return `${advisory}\n${TRACKING_MARKER}${handled}`;
-  return `${advisory}\n\n<sub>${prefix(b)}posted by [${b.name}](https://github.com/louisescher/crabd)</sub>\n${TRACKING_MARKER}${handled}`;
+  const handled = b.handledCommentId !== undefined ? `\n${handledMarker(b.handledCommentId, b.handledKind)}` : '';
+  const round = b.roundClaim ? `\n${roundMarker(b.roundClaim.headSha, b.roundClaim.feedbackToken)}` : '';
+  const markers = `${TRACKING_MARKER}${handled}${round}`;
+  if (!b.footer) return `${advisory}\n${markers}`;
+  return `${advisory}\n\n<sub>${prefix(b)}posted by [${b.name}](https://github.com/louisescher/crabd)</sub>\n${markers}`;
 }
 
 const MODE_VERB: Record<string, string> = {
   mention: 'working on your request',
   review: 'reviewing this pull request',
   implement: 'implementing this issue',
+  'implement:round': 'addressing the feedback on this pull request',
 };
 
 /** The initial "in progress" tracking comment body. */

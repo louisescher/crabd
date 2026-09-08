@@ -679,3 +679,46 @@ describe('resolveConfig — memory', () => {
     expect(cfg.memory.write).toBe('pr');
   });
 });
+
+describe('implement', () => {
+  it('defaults to no verify commands, rounds on, and the crabd/ branch prefix', () => {
+    const config = resolveConfig({ layers: {} });
+    expect(config.implement).toEqual({
+      branchPrefix: 'crabd/',
+      verify: { commands: [] },
+      rounds: { enabled: true, resolveThreads: true, maxThreads: 30 },
+    });
+  });
+
+  it('accumulates verify commands across layers so an org command cannot be dropped', () => {
+    const config = resolveConfig({
+      layers: {
+        org: { implement: { verify: { commands: ['pnpm lint'] } } },
+        repo: { implement: { verify: { commands: ['pnpm test', 'pnpm lint'] } } },
+      },
+    });
+    expect(config.implement.verify.commands).toEqual(['pnpm lint', 'pnpm test']);
+  });
+
+  it('takes the highest layer for the scalars', () => {
+    const config = resolveConfig({
+      layers: {
+        org: { implement: { branch_prefix: 'bot/', rounds: { max_threads: 5 } } },
+        repo: { implement: { rounds: { enabled: false } } },
+      },
+    });
+    expect(config.implement.branchPrefix).toBe('bot/');
+    expect(config.implement.rounds.maxThreads).toBe(5);
+    expect(config.implement.rounds.enabled).toBe(false);
+  });
+
+  it('honours a locked implement path at the org layer', () => {
+    const config = resolveConfig({
+      layers: {
+        org: { implement: { verify: { commands: ['pnpm lint'] } }, governance: { locked: ['implement.verify.commands'] } },
+        repo: { implement: { verify: { commands: ['echo skip'] } } },
+      },
+    });
+    expect(config.implement.verify.commands).toEqual(['pnpm lint']);
+  });
+});

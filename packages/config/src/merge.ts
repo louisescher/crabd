@@ -7,6 +7,8 @@ import {
   REVIEW_STRICTNESS_DIMENSIONS,
   REVIEW_VERIFY_MAX_CONCURRENCY_DEFAULT,
   REVIEW_VERIFY_MIN_CONFIDENCE_DEFAULT,
+  IMPLEMENT_BRANCH_PREFIX_DEFAULT,
+  IMPLEMENT_MAX_THREADS_DEFAULT,
   type BackoffStrategy,
   type CrabdConfigPartial,
   type ModePartial,
@@ -56,6 +58,13 @@ export interface ResolvedReviewVerify {
   model?: string;
 }
 
+/** The resolved `implement` block: how a round behaves and what verifies a change. */
+export interface ResolvedImplement {
+  branchPrefix: string;
+  verify: { commands: string[] };
+  rounds: { enabled: boolean; resolveThreads: boolean; maxThreads: number };
+}
+
 export interface ResolvedMode {
   name: string;
   enabled: boolean;
@@ -96,6 +105,7 @@ export interface ResolvedConfig {
     /** The opt-in second-pass refutation stage. */
     verify: ResolvedReviewVerify;
   };
+  implement: ResolvedImplement;
   webSearch: { enabled: boolean; maxResults: number };
   /** Which repo-authored context (instruction files, skills) crab'd pulls into the prompt, plus whether to send the full diff (vs. a compressed one). */
   context: { instructionFiles: boolean; skills: boolean; fullDiff: boolean };
@@ -368,6 +378,26 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
       REVIEW_VERIFY_MAX_CONCURRENCY_DEFAULT,
     ...(verifyModel ? { model: verifyModel } : {}),
   };
+  const implement: ResolvedImplement = {
+    branchPrefix:
+      pickScalar('implement.branch_prefix', (c) => c.implement?.branch_prefix, layers, locked) ??
+      IMPLEMENT_BRANCH_PREFIX_DEFAULT,
+    // Accumulated, not replaced: a command an org pins is a check a repository should not be able
+    // to drop by listing its own.
+    verify: {
+      commands: accumulateList('implement.verify.commands', (c) => c.implement?.verify?.commands, layers, locked),
+    },
+    rounds: {
+      enabled: pickScalar('implement.rounds.enabled', (c) => c.implement?.rounds?.enabled, layers, locked) ?? true,
+      resolveThreads:
+        pickScalar('implement.rounds.resolve_threads', (c) => c.implement?.rounds?.resolve_threads, layers, locked) ??
+        true,
+      maxThreads:
+        pickScalar('implement.rounds.max_threads', (c) => c.implement?.rounds?.max_threads, layers, locked) ??
+        IMPLEMENT_MAX_THREADS_DEFAULT,
+    },
+  };
+
   const webSearchEnabled = pickScalar('web_search.enabled', (c) => c.web_search?.enabled, layers, locked) ?? true;
   const webSearchMax = pickScalar('web_search.max_results', (c) => c.web_search?.max_results, layers, locked) ?? 5;
 
@@ -427,6 +457,7 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
       precedents,
       verify,
     },
+    implement,
     webSearch: { enabled: webSearchEnabled, maxResults: webSearchMax },
     context: { instructionFiles, skills: skillsEnabled, fullDiff },
     memory,

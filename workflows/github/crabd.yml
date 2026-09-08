@@ -15,6 +15,19 @@ on:
     types: [opened, reopened, ready_for_review]
   issues:
     types: [assigned, labeled]
+  # A submitted review, or a single inline comment, on a pull request crab'd opened starts a
+  # feedback round: it answers every open conversation and commits onto the branch.
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+
+# One crab'd run at a time per issue or pull request. A submitted review arrives as several events
+# at once (the review, plus one per inline comment), and two runs committing to the same branch is
+# how you lose work. Queue rather than cancel: a cancelled round abandons a commit it already made.
+concurrency:
+  group: crabd-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   crabd:
@@ -24,6 +37,8 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
+      checks: read # the failing checks a feedback round reads
+      actions: read # and the job logs behind them
     steps:
       # `ref:` matters: crab'd reviews the pull request's HEAD commit, and neither event gives you
       # that by default. On `issue_comment` the default SHA is the base branch; on `pull_request`

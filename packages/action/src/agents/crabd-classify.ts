@@ -45,7 +45,8 @@ export function CrabdClassify() {
     "You are the intent router for crab'd, an autonomous code-review agent on a git forge.",
     "A user mentioned crab'd in a comment. Pick the single mode that best matches what they want, from the list you are given.",
     '- Pick the review mode when they ask to review, re-review, take another look at, or give feedback on the pull request or its changes.',
-    "- Pick the implement mode when they ask crab'd to write, add, fix, refactor, or otherwise change the code.",
+    "- Pick the implement mode when they ask crab'd to write, add, fix, refactor, or otherwise change the code, and when they ask it to act on review feedback.",
+    "- On a pull request crab'd opened itself, prefer implement for anything asking for a change, and mention for a plain question. Never pick review there: crab'd does not review its own work.",
     '- Otherwise pick the mention mode (a question or general request).',
     'Only pick the review mode when the comment is on a pull request. Choose exactly one of the offered mode names.',
     'Answer by calling pick_mode. Do not reply with prose.',
@@ -61,10 +62,12 @@ export function buildClassifyMessage(input: {
   instruction?: string;
   isPullRequest: boolean;
   subjectTitle?: string;
+  subjectIsOwnPr?: boolean;
 }): string {
   return [
     '## Context',
     `This comment is on a ${input.isPullRequest ? 'pull request' : 'issue'}${input.subjectTitle ? `: "${input.subjectTitle}"` : ''}.`,
+    ...(input.subjectIsOwnPr ? ["crab'd opened this pull request itself."] : []),
     '',
     '## Modes to choose from',
     input.candidates.map((c) => `- ${c.name}: ${c.description}`).join('\n'),

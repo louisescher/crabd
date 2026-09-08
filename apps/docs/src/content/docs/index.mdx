@@ -3,7 +3,7 @@ title: crab'd
 description: A forge-agnostic, multi-provider coding agent for GitHub and Forgejo CI.
 template: splash
 hero:
-  tagline: The coding agent that answers @-mentions, reviews pull requests, and implements whole issues. Uses the model you choose, on the forge you use.
+  tagline: The coding agent that answers @-mentions, reviews pull requests, implements whole issues, and works the review feedback on its own pull requests. Uses the model you choose, on the forge you use.
   image:
     alt: The crab'd logo, a pixel-art crab
     file: ../../assets/logo.png
@@ -23,8 +23,8 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 ## Why crab'd?
 
 crab'd gives you the `@claude`-style workflow. You can mention it on an issue, let it review your
-PRs, hand it a whole issue to implement, all without being locked to one model vendor or one
-forge. It runs as a step in your CI, drives the [Flue](https://github.com/withastro/flue) agent
+PRs, hand it a whole issue to implement and then review its pull request like anyone else's, all
+without being locked to one model vendor or one forge. It runs as a step in your CI, drives the [Flue](https://github.com/withastro/flue) agent
 harness underneath, and posts its results back through a single forge-agnostic layer.
 
 <CardGrid stagger>

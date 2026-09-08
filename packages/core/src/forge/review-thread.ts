@@ -1,5 +1,5 @@
 import { FINDING_MARKER } from '../report/tracking.ts';
-import type { ForgeComment } from './types.ts';
+import type { ForgeComment, ReviewThreadSummary } from './types.ts';
 
 /**
  * One inline review comment as the forges report it, narrowed to the fields threading needs.
@@ -27,6 +27,8 @@ export interface RawReviewComment {
   original_position?: number | null;
   /** The few lines of diff the forge stores alongside the root comment. */
   diff_hunk?: string;
+  /** Forgejo reports who resolved a conversation. Absent or null while it is open. */
+  resolver?: { login?: string } | null;
 }
 
 /** An inline review conversation: what it is anchored to, and every comment in it. */
@@ -58,6 +60,66 @@ function byTime(a: RawReviewComment, b: RawReviewComment): number {
   const bt = b.created_at ?? '';
   if (at !== bt) return at < bt ? -1 : 1;
   return a.id - b.id;
+}
+
+const anchorLine = (c: RawReviewComment): number | undefined => c.line ?? c.original_line ?? undefined;
+
+/**
+ * What co-location compares on. A real line where the forge gives one, otherwise the diff position
+ * Forgejo reports. That is enough to keep two threads on the same file apart, which a bare path is not.
+ */
+const anchorKey = (c: RawReviewComment): number | undefined =>
+  anchorLine(c) ?? c.original_position ?? c.position ?? undefined;
+
+/**
+ * Group every inline comment on a pull request into threads, for the forges that report no reply
+ * ids. Uses the reply chain when the payload has one, and co-location on `path` + anchor when it
+ * does not, which is the same rule {@link buildReviewThread} applies to a single thread.
+ */
+export function groupReviewThreads(raw: RawReviewComment[]): ReviewThreadSummary[] {
+  const byId = new Map(raw.map((c) => [c.id, c]));
+  const threaded = raw.some((c) => Boolean(c.in_reply_to_id));
+
+  const rootOf = (start: RawReviewComment): RawReviewComment => {
+    let current = start;
+    const seen = new Set<number>([current.id]);
+    while (current.in_reply_to_id) {
+      const parent = byId.get(current.in_reply_to_id);
+      if (!parent || seen.has(parent.id)) break;
+      seen.add(parent.id);
+      current = parent;
+    }
+    return current;
+  };
+
+  const groups = new Map<string, RawReviewComment[]>();
+  for (const comment of raw) {
+    const key = threaded
+      ? `id:${rootOf(comment).id}`
+      : `anchor:${comment.path ?? ''}:${anchorKey(comment) ?? `solo-${comment.id}`}`;
+    const group = groups.get(key);
+    if (group) group.push(comment);
+    else groups.set(key, [comment]);
+  }
+
+  const summaries: ReviewThreadSummary[] = [];
+  for (const group of groups.values()) {
+    const ordered = [...group].sort(byTime);
+    const root = ordered[0];
+    if (!root) continue;
+    const line = anchorLine(root);
+    summaries.push({
+      id: String(root.id),
+      rootCommentId: root.id,
+      path: root.path ?? '',
+      ...(line !== undefined ? { line } : {}),
+      ...(root.diff_hunk ? { diffHunk: root.diff_hunk } : {}),
+      isResolved: ordered.some((c) => Boolean(c.resolver?.login)),
+      rootIsCrabd: (root.body ?? '').includes(FINDING_MARKER),
+      comments: ordered.map(toForgeComment),
+    });
+  }
+  return summaries;
 }
 
 /**
@@ -96,11 +158,6 @@ export function buildReviewThread(
   };
 
   const declaredRoot = rootOf(trigger);
-  const anchorLine = (c: RawReviewComment): number | undefined => c.line ?? c.original_line ?? undefined;
-  // What co-location compares on. A real line where the forge gives one, otherwise the diff position
-  // Forgejo reports — enough to keep two threads on the same file apart, which a bare path is not.
-  const anchorKey = (c: RawReviewComment): number | undefined =>
-    anchorLine(c) ?? c.original_position ?? c.position ?? undefined;
 
   let members = raw.filter((c) => rootOf(c).id === declaredRoot.id);
   let root = declaredRoot;

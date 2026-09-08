@@ -102,6 +102,24 @@ rate_limit:
     multiplier: 2
     jitter: true
 
+# Behavior of the implement mode: the branch names it uses, the commands that verify a change, and
+# feedback rounds on its own pull requests. See https://crabd.lou.gg/reference/config-yaml/#implement
+implement:
+  # branch_prefix: crabd/ # forced onto every branch crab'd creates
+
+  # Commands crab'd runs before it answers, reporting each result on the pull request. A failure
+  # does not block the commit; the checks on the pull request are the gate that does. These
+  # ACCUMULATE across layers, so a command your org pins cannot be dropped here.
+  verify:
+    commands:
+      - pnpm typecheck
+      - pnpm test
+
+  rounds:
+    enabled: true # a submitted review on a crab'd PR starts a round (GitHub only)
+    resolve_threads: true # resolve the conversations it fixed (GitHub only)
+    # max_threads: 30 # cap on the conversations one round is given
+
 modes:
   mention:
     enabled: true

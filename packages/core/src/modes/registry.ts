@@ -35,6 +35,12 @@ export interface FinalizeResult {
    * doesn't repeat it. Falls back to `summary` when unset.
    */
   trackingComment?: string;
+  /**
+   * Set when the mode already answered the triggering review comment itself, which suppresses the
+   * generic inline reply in `finalizeRun`. Without it a feedback round posts its whole summary as
+   * one more reply on top of the per-thread replies it just made.
+   */
+  handledThreadReplies?: boolean;
 }
 
 /**
@@ -105,6 +111,12 @@ export interface ValidateContext {
   anchorable: Map<string, Set<number>>;
   /** Working directory of the checked-out repo. */
   cwd: string;
+  /** What the run acts on. `implement` picks its phase from this. */
+  subjectKind?: 'issue' | 'pull_request';
+  /** Ids of the review threads the prompt rendered, in the same order. */
+  threadIds?: string[];
+  /** Verification commands the run declared, verbatim. */
+  verifyCommands?: string[];
 }
 
 const registry = new Map<string, ModeDefinition<unknown>>();

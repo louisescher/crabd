@@ -1,8 +1,19 @@
 import type { AuthProvider } from '../auth/types.ts';
 import { TRACKING_MARKER } from '../report/tracking.ts';
 import { foldCommentsIntoBody } from './review-body.ts';
-import { buildReviewThread, type RawReviewComment } from './review-thread.ts';
+import { buildReviewThread, groupReviewThreads, type RawReviewComment } from './review-thread.ts';
+import { assertExpectedParent } from './commit-guard.ts';
+import {
+  DEFAULT_LOG_TAIL,
+  describeCheckFailure,
+  MAX_FAILED_LOGS,
+  normalizeCheckConclusion,
+  normalizeReviewState,
+  tail,
+} from './checks.ts';
 import type {
+  CheckSummary,
+  ChecksSummary,
   CommitRequest,
   ForgeActor,
   ForgeAdapter,
@@ -11,9 +22,11 @@ import type {
   ForgeKind,
   ForgePullRequest,
   ForgeRepo,
+  ForgeReview,
   OpenPrRequest,
   PullRequestRef,
   ReviewSubmission,
+  ReviewThreadSummary,
   TrackingComment,
 } from './types.ts';
 
@@ -67,6 +80,11 @@ export class ForgejoForge implements ForgeAdapter {
     return { Authorization: `token ${token}`, 'Content-Type': 'application/json', Accept: 'application/json' };
   }
 
+  /**
+   * A 404 is tolerated on a GET, where several callers use it as an existence probe (does this
+   * branch exist, does this file exist). On a write it is an error: an endpoint that is not there
+   * cannot have done anything, and swallowing it hid a reply path that silently did nothing.
+   */
   private async api<T>(method: string, path: string, body?: unknown): Promise<{ status: number; data: T | undefined }> {
     const res = await fetch(`${this.baseUrl}${path}`, {
       method,
@@ -75,7 +93,8 @@ export class ForgejoForge implements ForgeAdapter {
     });
     const text = await res.text();
     const data = text ? (JSON.parse(text) as T) : undefined;
-    if (!res.ok && res.status !== 404) {
+    const tolerate404 = method === 'GET' && res.status === 404;
+    if (!res.ok && !tolerate404) {
       throw new Error(`crabd forgejo: ${method} ${path} → ${res.status} ${text.slice(0, 300)}`);
     }
     return { status: res.status, data };
@@ -114,14 +133,18 @@ export class ForgejoForge implements ForgeAdapter {
       if (!event.pullRequest || !event.pullRequest.headRef) {
         const { data: pr } = await this.api<{
           number: number; title: string; body?: string; user?: { login?: string }; state: string;
-          head?: { ref?: string; sha?: string; repo?: { fork?: boolean } }; base?: { ref?: string };
+          head?: { ref?: string; sha?: string; repo?: { fork?: boolean; full_name?: string } }; base?: { ref?: string };
           draft?: boolean;
         }>('GET', `${this.prefix}/pulls/${prNumber}`);
         if (pr) {
+          const headRepoSlug = pr.head?.repo?.full_name;
           context.pullRequest = {
             number: pr.number, title: pr.title, body: pr.body ?? '', author: pr.user?.login ?? 'unknown',
             labels: [], state: pr.state, headRef: pr.head?.ref ?? '', baseRef: pr.base?.ref ?? '',
-            headSha: pr.head?.sha ?? '', fromFork: pr.head?.repo?.fork ?? false, isDraft: pr.draft ?? false,
+            headSha: pr.head?.sha ?? '',
+            ...(headRepoSlug ? { headRepoSlug } : {}),
+            fromFork: headRepoSlug ? headRepoSlug !== this.repo.slug : (pr.head?.repo?.fork ?? false),
+            isDraft: pr.draft ?? false,
           } satisfies ForgePullRequest;
         }
       }
@@ -218,8 +241,23 @@ export class ForgejoForge implements ForgeAdapter {
     await this.api('POST', `${this.prefix}/issues/comments/${commentId}/reactions`, { content: reaction });
   }
 
+  /**
+   * Forgejo has no reply endpoint and no threading, so a reply is a one-comment review anchored to
+   * the same place. `groupReviewThreads` reads those back as one thread by co-location, which is
+   * how the reply reads as a reply. Falls back to a plain issue comment when the anchor is gone.
+   */
   async replyToReviewComment(pullNumber: number, commentId: number, body: string): Promise<void> {
-    await this.api('POST', `${this.prefix}/pulls/${pullNumber}/comments/${commentId}/replies`, { body });
+    const target = (await this.reviewComments(pullNumber)).find((c) => c.id === commentId);
+    const line = target?.line ?? target?.original_line ?? target?.position ?? target?.original_position;
+    if (!target?.path || line === undefined || line === null) {
+      await this.api('POST', `${this.prefix}/issues/${pullNumber}/comments`, { body });
+      return;
+    }
+    await this.postReview(pullNumber, {
+      body: '',
+      event: 'COMMENT',
+      comments: [{ path: target.path, line, body }],
+    });
   }
 
   async postReview(prNumber: number, review: ReviewSubmission): Promise<void> {
@@ -239,11 +277,90 @@ export class ForgejoForge implements ForgeAdapter {
     }
   }
 
+  async listReviewThreads(prNumber: number): Promise<ReviewThreadSummary[]> {
+    return groupReviewThreads(await this.reviewComments(prNumber));
+  }
+
+  async listReviews(prNumber: number): Promise<ForgeReview[]> {
+    const { data } = await this.api<
+      {
+        id: number;
+        state?: string;
+        body?: string;
+        user?: { login?: string };
+        submitted_at?: string;
+      }[]
+    >('GET', `${this.prefix}/pulls/${prNumber}/reviews`);
+    return (data ?? []).map((review) => ({
+      id: review.id,
+      state: normalizeReviewState(review.state),
+      body: review.body ?? '',
+      author: review.user?.login ?? 'unknown',
+      submittedAt: review.submitted_at ?? '',
+    }));
+  }
+
+  /** Forgejo has no resolve-conversation endpoint, in any version through v16. */
+  async resolveReviewThread(_threadId: string): Promise<boolean> {
+    return false;
+  }
+
+  async listChecks(sha: string, options?: { logTailBytes?: number }): Promise<ChecksSummary> {
+    const checks: CheckSummary[] = [];
+    try {
+      const { data } = await this.api<{
+        statuses?: { context?: string; status?: string; target_url?: string; description?: string }[];
+      }>('GET', `${this.prefix}/commits/${sha}/status`);
+      for (const status of data?.statuses ?? []) {
+        checks.push({
+          name: status.context ?? 'status',
+          conclusion: normalizeCheckConclusion('completed', status.status),
+          ...(status.target_url ? { url: status.target_url } : {}),
+        });
+      }
+    } catch (error) {
+      return { available: false, reason: describeCheckFailure(error), checks: [] };
+    }
+
+    try {
+      const { data: runs } = await this.api<{ workflow_runs?: { id: number; status?: string; html_url?: string }[] }>(
+        'GET',
+        `${this.prefix}/actions/runs?head_sha=${encodeURIComponent(sha)}&limit=20`,
+      );
+      const tailBytes = options?.logTailBytes ?? DEFAULT_LOG_TAIL;
+      let logged = 0;
+      for (const run of runs?.workflow_runs ?? []) {
+        const { data: jobs } = await this.api<{ id: number; name?: string; status?: string }[]>(
+          'GET',
+          `${this.prefix}/actions/runs/${run.id}/jobs`,
+        );
+        for (const job of jobs ?? []) {
+          const conclusion = normalizeCheckConclusion(job.status, job.status);
+          const name = job.name ?? `job ${job.id}`;
+          const existing = checks.find((check) => check.name === name);
+          const check = existing ?? { name, conclusion, ...(run.html_url ? { url: run.html_url } : {}) };
+          if (!existing) checks.push(check);
+          if (conclusion !== 'failure' || logged >= MAX_FAILED_LOGS) continue;
+          const log = await this.raw(`${this.prefix}/actions/jobs/${job.id}/logs`);
+          if (log) {
+            check.logTail = tail(log, tailBytes);
+            logged += 1;
+          }
+        }
+      }
+    } catch {
+      // No Actions access, or none ran for this commit. The commit statuses above still stand.
+    }
+
+    return { available: true, checks };
+  }
+
   async commitToBranch(request: CommitRequest): Promise<void> {
     const baseBranch = request.baseBranch ?? this.repo.defaultBranch;
 
     // Create the branch from the base branch if it does not exist.
-    const existing = await this.api('GET', `${this.prefix}/branches/${request.branch}`);
+    const existing = await this.api<{ commit?: { id?: string } }>('GET', `${this.prefix}/branches/${request.branch}`);
+    if (existing.status !== 404) assertExpectedParent(request, existing.data?.commit?.id ?? '');
     if (existing.status === 404) {
       await this.api('POST', `${this.prefix}/branches`, {
         new_branch_name: request.branch,

@@ -31,6 +31,13 @@ function commitRefusal(ctx: FinalizeContext<MentionOutput>): string | undefined 
   if (!ctx.trigger.userInstruction?.trim()) {
     return 'I did not commit anything, because this mention did not ask for a change. Say what you want changed and I will make it.';
   }
+  // A fork's head branch does not exist in this repository, so committing would not amend the pull
+  // request: it would create a same-named branch here, off the default branch, which is worse than
+  // doing nothing.
+  const pr = ctx.context.pullRequest;
+  if (pr?.fromFork) {
+    return `I did not commit anything: this pull request's branch lives in \`${pr.headRepoSlug ?? 'another repository'}\`, which I cannot write to.`;
+  }
   return undefined;
 }
 

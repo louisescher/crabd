@@ -1,4 +1,6 @@
+import { isCrabdPullRequest } from '../forge/ownership.ts';
 import type { ForgeEvent } from '../forge/types.ts';
+import { isCrabdAuthored } from '../report/tracking.ts';
 
 /** The three built-in modes. Custom modes may be added to the registry. */
 export const BUILTIN_MODES = ['mention', 'review', 'implement'] as const;
@@ -30,6 +32,8 @@ export interface DetectOptions {
    * mention. Defaults to {@link enabledModes}.
    */
   knownModes?: ReadonlySet<string>;
+  branchPrefix?: string;
+  implementRounds?: boolean;
 }
 
 /** Locate the trigger phrase in a comment body and return the text following it. */
@@ -54,6 +58,32 @@ function splitModeKeyword(rest: string, modes: ReadonlySet<string>): { mode?: st
 }
 
 /**
+ * Whether a submitted review asks for anything on its own. A review whose only content is inline
+ * comments reports an empty body on both forges, and its comments arrive as their own events, so
+ * this deliberately does not try to infer them.
+ */
+function reviewHasSomethingToAct(event: ForgeEvent): boolean {
+  const review = event.review;
+  if (!review) return false;
+  if (review.state === 'changes_requested') return true;
+  return review.state === 'commented' && review.body.trim().length > 0;
+}
+
+function detectRound(event: ForgeEvent, options: DetectOptions): TriggerResult | null {
+  if (options.implementRounds === false) return null;
+  if (event.kind !== 'pull_request_review' && event.kind !== 'pull_request_review_comment') return null;
+  if (event.kind === 'pull_request_review' && event.action !== 'submitted') return null;
+  if (event.kind === 'pull_request_review_comment' && event.action !== 'created') return null;
+  if (event.kind === 'pull_request_review' && !reviewHasSomethingToAct(event)) return null;
+  if (event.pullRequest?.isDraft) return null;
+  if (isCrabdAuthored(event.comment?.body)) return null;
+  if (!isCrabdPullRequest(event.pullRequest, options.branchPrefix)) return null;
+  return options.enabledModes.has('implement')
+    ? { mode: 'implement', explicit: event.kind === 'pull_request_review' }
+    : null;
+}
+
+/**
  * Decide which mode (if any) an event triggers, and extract any post-mention
  * instruction. Returns `null` when nothing applies or the matched mode is disabled.
  *
@@ -66,6 +96,10 @@ function splitModeKeyword(rest: string, modes: ReadonlySet<string>): { mode?: st
  * - A pull_request opened/reopened/ready_for_review → `review` (NOT on every push/update),
  *   unless the PR is still a draft. A mention in a draft PR still works.
  * - An issue opened/assigned/labeled → `implement`.
+ * - A submitted review, or an inline review comment, on a pull request crab'd owns → `implement`,
+ *   with no trigger phrase needed, which is how a feedback round starts. Never on crab'd's own
+ *   text, recognized by the markers it stamps into everything it writes. Both of these are
+ *   GitHub-only in practice: Forgejo Actions has no review events to dispatch on.
  */
 export function detectTrigger(event: ForgeEvent, options: DetectOptions): TriggerResult | null {
   const gate = (result: TriggerResult): TriggerResult | null =>
@@ -74,14 +108,16 @@ export function detectTrigger(event: ForgeEvent, options: DetectOptions): Trigge
   if (event.comment) {
     if (event.action === 'deleted') return null;
     const rest = afterPhrase(event.comment.body, options.triggerPhrase);
-    if (rest === null) return null;
-    const { mode, instruction } = splitModeKeyword(rest, options.knownModes ?? options.enabledModes);
-    return gate({
-      mode: mode ?? 'mention',
-      // A matched keyword is an explicit choice; a bare mention is not and may be classified.
-      explicit: mode !== undefined,
-      userInstruction: instruction.length > 0 ? instruction : undefined,
-    });
+    if (rest !== null) {
+      const { mode, instruction } = splitModeKeyword(rest, options.knownModes ?? options.enabledModes);
+      return gate({
+        mode: mode ?? 'mention',
+        // A matched keyword is an explicit choice; a bare mention is not and may be classified.
+        explicit: mode !== undefined,
+        userInstruction: instruction.length > 0 ? instruction : undefined,
+      });
+    }
+    return detectRound(event, options);
   }
 
   if (event.kind === 'pull_request') {

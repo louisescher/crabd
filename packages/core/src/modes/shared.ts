@@ -22,6 +22,7 @@ export interface CommitOptions {
   writesAllowed?: boolean;
   baseline: Baseline;
   secretScan?: boolean;
+  expectedParentSha?: string;
 }
 
 /**
@@ -52,6 +53,7 @@ export async function commitWorkingChanges(options: CommitOptions): Promise<bool
     message: options.message,
     changes,
     baseBranch: options.baseBranch,
+    ...(options.expectedParentSha ? { expectedParentSha: options.expectedParentSha } : {}),
   });
   log(`committed ${changes.length} change(s) to \`${options.branch}\``);
   return true;

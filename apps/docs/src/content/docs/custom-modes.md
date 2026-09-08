@@ -54,7 +54,14 @@ export default defineCrabdConfig({
 - `ctx.context`: the fetched issue/PR, comments, diff, and changed files,
 - `ctx.config`, `ctx.event`, `ctx.trigger`, `ctx.cwd`.
 
-Return a `summary` (rendered into the tracking comment) and optionally a `prUrl`.
+On a pull request, `ctx.context` also carries `reviewThreads` (every unresolved review conversation,
+with its id and anchor), `reviews` (the submitted review bodies), and `checks` (the CI state for the
+head commit). These are fetched only for a run that renders them, so a mode that wants them should
+say so in its own prompt.
+
+Return a `summary` (rendered into the tracking comment) and optionally a `prUrl`. Set
+`handledThreadReplies: true` when the mode already replied to the triggering review conversation
+itself, which stops crab'd posting the summary there a second time.
 
 ## Modes that write
 
@@ -74,3 +81,15 @@ If your `finalize` commits or opens a pull request, declare it:
 the write: check `ctx.config.permissions.write` in `finalize` and say what you did instead. Pass
 that same flag to `commitWorkingChanges({ …, writesAllowed: ctx.config.permissions.write })`, which
 throws rather than committing when writes are disabled.
+
+## Checking output before acting on it
+
+A mode can add a `validate(data, ctx)` step, which runs after the schema check and before
+`finalize`. Return `{ ok: true }`, or `{ ok: false, repairPrompt }` to send the model a correction
+on the same session, keeping everything it has already read. `ctx` carries `changedPaths`,
+`anchorable` (the lines a forge accepts an inline comment on), `cwd`, `subjectKind`, `threadIds`
+(the review conversations the prompt rendered), and `verifyCommands`.
+
+This is for output that is well-typed and wrong about the world: a finding on a line the forge will
+reject, an answer for a review conversation that does not exist. Without it, those are discovered
+in `finalize`, long after the model is gone.

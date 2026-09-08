@@ -30,6 +30,14 @@ on:
     types: [opened, reopened, ready_for_review]
   issues:
     types: [assigned, labeled]
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+
+concurrency:
+  group: crabd-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   crabd:
@@ -38,6 +46,8 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
+      checks: read
+      actions: read
       id-token: write
     steps:
       - uses: actions/checkout@v4
@@ -114,6 +124,9 @@ Once the workflow is committed, try any of these:
 - **Mention**: comment `/crabd how does the auth middleware work?` on an issue or PR.
 - **Review**: open a pull request; crab'd reviews the diff automatically.
 - **Implement**: assign an issue to crab'd (or label it) to have it open a PR.
+- **Review its work**: review that pull request. On GitHub, crab'd answers every conversation and
+  pushes a commit to the branch. On Forgejo, ask for the same thing with
+  `/crabd implement address the review`.
 
 crab'd posts a "working..." comment, then updates it in place with the result.
 

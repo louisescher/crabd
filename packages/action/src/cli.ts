@@ -24,6 +24,7 @@ import {
   type ModeDefinition,
 } from '@crabd/core';
 import { buildClassifyMessage, CrabdClassify, type ClassifyCreation } from './agents/crabd-classify.ts';
+import { implementPhase } from '@crabd/core';
 import { CrabdRefuter } from './agents/crabd-refuter.ts';
 import { CrabdTurn } from './agents/crabd-turn.ts';
 import { loadResolvedConfig } from './config-loader.ts';
@@ -106,6 +107,9 @@ function toFailureKind(kind: string): FailureKind {
 interface TurnValidation {
   changedPaths: string[];
   anchorable: { path: string; ranges: string[] }[];
+  subjectKind?: 'issue' | 'pull_request';
+  threadIds?: string[];
+  verifyCommands?: string[];
 }
 
 /** Run one crab'd turn in this process and return its structured result. */
@@ -473,17 +477,23 @@ async function main(): Promise<number> {
       memory: plan.memory,
       today: new Date().toISOString().slice(0, 10),
       branding: plan.branding,
+      verbKey: plan.verbKey,
     }),
   );
 
   const images = extractImageUrls(event.comment?.body, context.issue?.body, context.pullRequest?.body);
 
-  // Anchorable lines travel as compact ranges rather than a second copy of the diff: the turn
-  // input is passed as a command-line argument, and the message already carries the diff plus the
-  // changed files' contents, so duplicating it risks an oversized argv.
+  // Anchorable lines travel as compact ranges rather than a second copy of the diff, and the
+  // review threads as bare ids: this is re-read on every repair pass, and the message already
+  // carries the diff, the changed files' contents and the conversations themselves.
   const validation: TurnValidation = {
     changedPaths: context.changedFiles.map((f) => f.path),
     anchorable: context.diff ? describeCommentableLines(context.diff) : [],
+    subjectKind: implementPhase(context, event) === 'round' ? 'pull_request' : 'issue',
+    ...(context.reviewThreads ? { threadIds: context.reviewThreads.map((thread) => thread.id) } : {}),
+    ...(config.implement.verify.commands.length > 0
+      ? { verifyCommands: config.implement.verify.commands }
+      : {}),
   };
 
   let turn: CrabdTurnResult;
@@ -513,7 +523,7 @@ async function main(): Promise<number> {
       await adapter.updateTrackingComment(
         plan.tracking,
         renderRateLimitExhausted(plan.branding, {
-          mode: plan.mode,
+          mode: plan.verbKey,
           attempts: turn.error.attempts ?? 0,
           ...(turn.error.lastModel ? { lastModel: turn.error.lastModel } : {}),
           soft,

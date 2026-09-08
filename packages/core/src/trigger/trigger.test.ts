@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { detectTrigger } from './detect.ts';
 import { parseGitHubEvent } from './parse-github.ts';
-import type { ForgeEvent } from '../forge/types.ts';
+import type { ForgeEvent, ForgePullRequest, ForgeReview } from '../forge/types.ts';
+import { PR_MARKER, REPLY_MARKER } from '../report/tracking.ts';
 
 const ALL_MODES = new Set(['mention', 'review', 'implement']);
 
@@ -147,6 +148,100 @@ describe('detectTrigger — non-comment events', () => {
   });
 });
 
+describe('detectTrigger: feedback rounds', () => {
+  const ownPr = (overrides: Partial<ForgePullRequest> = {}): ForgePullRequest => ({
+    number: 4, title: 'T', body: `B\n\n${PR_MARKER}`, author: 'crabd', labels: [], state: 'open',
+    headRef: 'crabd/implement-3', baseRef: 'main', headSha: 'abc', fromFork: false, isDraft: false,
+    ...overrides,
+  });
+
+  const reviewEvent = (overrides: Partial<ForgeEvent> = {}, review?: Partial<ForgeReview>): ForgeEvent => ({
+    forge: 'github',
+    kind: 'pull_request_review',
+    action: 'submitted',
+    repo: { owner: 'acme', name: 'app', slug: 'acme/app', defaultBranch: 'main', isPrivate: true },
+    actor: { login: 'dev', association: 'MEMBER', isBot: false },
+    pullRequest: ownPr(),
+    review: { id: 50, state: 'changes_requested', body: 'needs work', author: 'dev', submittedAt: '', ...review },
+    comment: { id: 50, body: review?.body ?? 'needs work', author: 'dev', createdAt: '' },
+    raw: {},
+    ...overrides,
+  });
+
+  const inlineEvent = (overrides: Partial<ForgeEvent> = {}): ForgeEvent => ({
+    forge: 'github',
+    kind: 'pull_request_review_comment',
+    action: 'created',
+    repo: { owner: 'acme', name: 'app', slug: 'acme/app', defaultBranch: 'main', isPrivate: true },
+    actor: { login: 'dev', association: 'MEMBER', isBot: false },
+    pullRequest: ownPr(),
+    comment: { id: 12, body: 'this is wrong', author: 'dev', createdAt: '' },
+    raw: {},
+    ...overrides,
+  });
+
+  const opts = { triggerPhrase: '@crabd', enabledModes: ALL_MODES };
+
+  it('submitted review requesting changes on its own PR → implement, explicitly', () => {
+    expect(detectTrigger(reviewEvent(), opts)).toEqual({ mode: 'implement', explicit: true });
+  });
+
+  it('a comment-only review with a body → implement', () => {
+    expect(detectTrigger(reviewEvent({}, { state: 'commented', body: 'one thought' }), opts)?.mode).toBe(
+      'implement',
+    );
+  });
+
+  it('an approval with nothing to act on → no trigger', () => {
+    expect(detectTrigger(reviewEvent({}, { state: 'approved', body: '' }), opts)).toBeNull();
+  });
+
+  it('an empty comment-only review → no trigger', () => {
+    expect(detectTrigger(reviewEvent({}, { state: 'commented', body: '' }), opts)).toBeNull();
+  });
+
+  it('a review on someone else\'s PR → no trigger', () => {
+    const event = reviewEvent({ pullRequest: ownPr({ body: 'B', headRef: 'feat/mine' }) });
+    expect(detectTrigger(event, opts)).toBeNull();
+  });
+
+  it('recognizes its own PR by the branch prefix when the marker is gone', () => {
+    const event = reviewEvent({ pullRequest: ownPr({ body: 'B' }) });
+    expect(detectTrigger(event, opts)?.mode).toBe('implement');
+  });
+
+  it('an inline comment on its own PR → implement, left to the classifier', () => {
+    expect(detectTrigger(inlineEvent(), opts)).toEqual({ mode: 'implement', explicit: false });
+  });
+
+  it('ignores its own text, so a reply cannot loop', () => {
+    const event = inlineEvent({ comment: { id: 13, body: `done\n\n${REPLY_MARKER}`, author: 'crabd', createdAt: '' } });
+    expect(detectTrigger(event, opts)).toBeNull();
+  });
+
+  it('a draft PR is left alone', () => {
+    expect(detectTrigger(reviewEvent({ pullRequest: ownPr({ isDraft: true }) }), opts)).toBeNull();
+  });
+
+  it('rounds off → no trigger', () => {
+    expect(detectTrigger(reviewEvent(), { ...opts, implementRounds: false })).toBeNull();
+  });
+
+  it('implement disabled → no trigger', () => {
+    expect(detectTrigger(reviewEvent(), { ...opts, enabledModes: new Set(['mention', 'review']) })).toBeNull();
+  });
+
+  it('a trigger phrase in a review body still selects a keyword mode', () => {
+    const event = reviewEvent({}, { body: '@crabd review this again' });
+    expect(detectTrigger(event, opts)).toEqual({ mode: 'review', explicit: true, userInstruction: 'this again' });
+  });
+
+  it('a dismissed or edited review is not a round', () => {
+    expect(detectTrigger(reviewEvent({ action: 'edited' }), opts)).toBeNull();
+    expect(detectTrigger(reviewEvent({ action: 'dismissed' }), opts)).toBeNull();
+  });
+});
+
 describe('parseGitHubEvent', () => {
   it('normalizes an issue_comment on a PR', () => {
     const ev = parseGitHubEvent('issue_comment', {
@@ -241,6 +336,92 @@ describe('parseGitHubEvent', () => {
 
     it('does not infer for other unhandled event names', () => {
       expect(parseGitHubEvent('push', { repository, pull_request: { number: 7 } })).toBeNull();
+    });
+
+    it('infers pull_request_review before pull_request', () => {
+      const ev = parseGitHubEvent('workflow_call', {
+        repository,
+        sender: { login: 'dev', type: 'User' },
+        action: 'submitted',
+        pull_request: { number: 4, head: { ref: 'crabd/x', sha: 'abc' }, base: { ref: 'main' } },
+        review: { id: 90, state: 'CHANGES_REQUESTED', body: 'no', user: { login: 'dev' } },
+      }, 'forgejo');
+      expect(ev?.kind).toBe('pull_request_review');
+    });
+  });
+
+  describe('pull_request_review', () => {
+    const repository = { name: 'app', full_name: 'acme/app', owner: { login: 'acme' }, default_branch: 'main' };
+
+    it('normalizes the review and mirrors it as the triggering comment', () => {
+      const ev = parseGitHubEvent('pull_request_review', {
+        repository,
+        action: 'submitted',
+        sender: { login: 'dev', type: 'User' },
+        pull_request: { number: 4, title: 'T', head: { ref: 'crabd/x', sha: 'abc' }, base: { ref: 'main' } },
+        review: { id: 90, state: 'CHANGES_REQUESTED', body: 'needs work', user: { login: 'dev' }, submitted_at: '2026-01-01T00:00:00Z' },
+      });
+      expect(ev?.kind).toBe('pull_request_review');
+      expect(ev?.review).toEqual({
+        id: 90,
+        state: 'changes_requested',
+        body: 'needs work',
+        author: 'dev',
+        submittedAt: '2026-01-01T00:00:00Z',
+      });
+      expect(ev?.comment).toEqual({ id: 90, body: 'needs work', author: 'dev', createdAt: '2026-01-01T00:00:00Z' });
+    });
+
+    it('maps Forgejo\'s rejected state onto changes_requested', () => {
+      const ev = parseGitHubEvent('pull_request_review', {
+        repository,
+        action: 'submitted',
+        sender: { login: 'dev', type: 'User' },
+        pull_request: { number: 4, head: { ref: 'crabd/x' }, base: { ref: 'main' } },
+        review: { id: 1, state: 'REJECTED', body: 'no' },
+      }, 'forgejo');
+      expect(ev?.review?.state).toBe('changes_requested');
+    });
+  });
+
+  describe('fromFork', () => {
+    const repository = { name: 'app', full_name: 'acme/app', owner: { login: 'acme' }, default_branch: 'main' };
+
+    it('compares head and base repositories rather than trusting the fork flag', () => {
+      const sameRepo = parseGitHubEvent('pull_request', {
+        repository,
+        action: 'opened',
+        sender: { login: 'dev', type: 'User' },
+        pull_request: {
+          number: 4,
+          head: { ref: 'feat', sha: 'abc', repo: { fork: true, full_name: 'acme/app' } },
+          base: { ref: 'main' },
+        },
+      });
+      expect(sameRepo?.pullRequest?.fromFork).toBe(false);
+      expect(sameRepo?.pullRequest?.headRepoSlug).toBe('acme/app');
+
+      const otherRepo = parseGitHubEvent('pull_request', {
+        repository,
+        action: 'opened',
+        sender: { login: 'dev', type: 'User' },
+        pull_request: {
+          number: 4,
+          head: { ref: 'feat', sha: 'abc', repo: { fork: false, full_name: 'someone/app' } },
+          base: { ref: 'main' },
+        },
+      });
+      expect(otherRepo?.pullRequest?.fromFork).toBe(true);
+    });
+
+    it('falls back to the fork flag when the head repository is unknown', () => {
+      const ev = parseGitHubEvent('pull_request', {
+        repository,
+        action: 'opened',
+        sender: { login: 'dev', type: 'User' },
+        pull_request: { number: 4, head: { ref: 'feat', sha: 'abc', repo: { fork: true } }, base: { ref: 'main' } },
+      });
+      expect(ev?.pullRequest?.fromFork).toBe(true);
     });
   });
 });

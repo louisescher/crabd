@@ -133,11 +133,13 @@ explicit `token_env` there.
 > the reply ends with `I did not commit anything…`, or a commit fails with
 > `Resource not accessible by integration`
 
-Three reasons, in order of likelihood:
+Four reasons, in order of likelihood:
 
 - **The mention didn't ask for a change.** `mention` mode commits only when the comment asks for
   one. A bare `/crabd`, or a question, gets an answer even if crab'd noticed a fix worth making.
   Ask for the change explicitly.
+- **The pull request comes from a fork.** Its branch lives in another repository, which crab'd
+  cannot write to. The reply names the repository and lists the files it would have changed.
 - **Writes are off.** Either `permissions.write: false`, or `modes.implement.enabled: false`, which
   turns writes off everywhere unless you set `permissions.write: true`. See
   [`permissions`](/reference/config-yaml/#permissions).
@@ -147,6 +149,45 @@ Three reasons, in order of likelihood:
   request on the installation (an org owner has to approve it; raising the App's permissions alone
   does nothing until the installation accepts). Older versions surfaced this only as a 403 from
   `POST /repos/…/git/blobs` at the very end of a run.
+
+## No feedback round started
+
+> a review was submitted on a crab'd pull request and nothing happened
+
+- **You are on Forgejo.** Forgejo Actions has no `pull_request_review` or
+  `pull_request_review_comment` trigger, so a review cannot start a run there at all. Comment
+  `/crabd implement address the review` on the pull request instead.
+- **The workflow doesn't subscribe to the event.** Add `pull_request_review: types: [submitted]`
+  and `pull_request_review_comment: types: [created]` to the `on:` block. The template in
+  `workflows/github/crabd.yml` has both.
+- **crab'd doesn't own the pull request.** Automatic rounds only fire on pull requests crab'd
+  opened, recognized by a hidden marker in the description or by the `crabd/` branch prefix. On
+  anyone else's pull request, ask for the round with `/crabd implement address the review`.
+- **The review had nothing to act on.** An approval with an empty body, and a comment-only review
+  with no body and no inline comments, are both no-ops.
+- **Rounds are off,** through `implement.rounds.enabled: false`, or because `implement` itself is
+  disabled, which also turns writes off.
+- **Another run got there first.** A submitted review with inline comments arrives as several
+  events at once. The first run claims the round and the rest skip it, which the log records as
+  `feedback round for <sha> was already handled`. That is the intended behavior: one round answers
+  everything that is open.
+
+## A round replied but resolved nothing
+
+crab'd resolves only the conversations it marked as fixed, and only on GitHub. The Forgejo API has
+no endpoint for resolving a conversation in any version through v16, so a Forgejo round posts one
+summary comment and leaves the resolving to you. It says so in the comment.
+
+## A round refused because the branch moved
+
+> `refusing to commit: <branch> moved from abc12345 to def67890 during this run`
+
+Something else pushed to the pull request while crab'd was working. crab'd commits whole files read
+from its checkout, so applying them on top of a newer commit would revert whatever landed in
+between. Nothing was committed. Ask for the round again and it works from the new head.
+
+A `concurrency:` block in the workflow prevents the version of this that crab'd causes itself, where
+two of its own runs commit to one branch. Both workflow templates ship with one.
 
 ## Unexpected error
 
@@ -165,9 +206,9 @@ attribute, so silence means it never got far enough to have anything to say. In 
   `if:` was false, not that crab'd declined. Note that in a Forgejo reusable workflow the parent
   job still reports **success** when the inner job skips, so the run looks green. See the
   [`github.event_name` caveat](/self-hosting/#reusable-workflows).
-- **The event isn't one crab'd handles.** The logs end with `event "…" is not handled. Skipping.`
-  crab'd acts on `pull_request`, `issue_comment`, `pull_request_review_comment`, and `issues` only.
-  A `push`, for example, is a deliberate no-op.
+- **The event isn't one crab'd handles.** The logs end with `event "..." is not handled. Skipping.`
+  crab'd acts on `pull_request`, `issue_comment`, `pull_request_review`,
+  `pull_request_review_comment`, and `issues` only. A `push`, for example, is a deliberate no-op.
 - **No trigger matched.** A comment must contain the trigger phrase, and a `pull_request` only
   auto-reviews on `opened` / `reopened` / `ready_for_review`, not on a push to the branch. Mention
   `/crabd review` to re-review.

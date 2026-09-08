@@ -6,6 +6,11 @@
 # Identity: Forgejo has no GitHub App equivalent, so crab'd acts as whatever bot
 # account owns CRABD_FORGEJO_TOKEN. Create a dedicated bot user, give it repo access,
 # and store its token as the CRABD_FORGEJO_TOKEN secret — its name/avatar become crab'd.
+#
+# Feedback rounds: Forgejo Actions has no `pull_request_review` or
+# `pull_request_review_comment` trigger, so a submitted review cannot start a run here. Comment
+# `/crabd implement address the review` on the pull request instead. The round then reads every
+# open conversation the same way it does on GitHub.
 name: crab'd
 on:
   issue_comment:
@@ -14,6 +19,12 @@ on:
     types: [opened, reopened, ready_for_review]
   issues:
     types: [assigned, labeled]
+
+# One crab'd run at a time per issue or pull request: two runs committing to the same branch is how
+# you lose work. Queue rather than cancel, so a round never abandons a commit it already made.
+concurrency:
+  group: crabd-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   crabd:

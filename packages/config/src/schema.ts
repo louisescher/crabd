@@ -362,6 +362,45 @@ export const ReviewPartialSchema = v.object({
 });
 export type ReviewPartial = v.InferOutput<typeof ReviewPartialSchema>;
 
+export const ImplementVerifyPartialSchema = v.object({
+  /**
+   * Commands the agent must run before submitting, from the repository root. Reported back with
+   * their outcome and disclosed on the pull request; a failure never blocks the commit, because CI
+   * is the gate that does. ACCUMULATES across layers, like `review.exclusions`, so an org can pin
+   * a check a repository cannot silently drop.
+   */
+  commands: v.optional(v.array(v.string())),
+});
+export type ImplementVerifyPartial = v.InferOutput<typeof ImplementVerifyPartialSchema>;
+
+export const ImplementRoundsPartialSchema = v.object({
+  /**
+   * Whether a submitted review, or an inline review comment, on a pull request crab'd owns starts
+   * a feedback round with no trigger phrase. GitHub only: Forgejo Actions has no review events, so
+   * a Forgejo round always starts from a mention.
+   */
+  enabled: v.optional(v.boolean()),
+  /** Whether to resolve the review threads a round fixed. GitHub only; Forgejo has no such API. */
+  resolve_threads: v.optional(v.boolean()),
+  /** Cap on how many open threads one round is given. */
+  max_threads: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
+});
+export type ImplementRoundsPartial = v.InferOutput<typeof ImplementRoundsPartialSchema>;
+
+export const IMPLEMENT_BRANCH_PREFIX_DEFAULT = 'crabd/';
+export const IMPLEMENT_MAX_THREADS_DEFAULT = 30;
+
+export const ImplementPartialSchema = v.object({
+  /**
+   * Prefix crab'd puts on the branches it creates. Also the fallback signal for "crab'd opened this
+   * pull request" when the marker in the description has been edited away.
+   */
+  branch_prefix: v.optional(v.string()),
+  verify: v.optional(ImplementVerifyPartialSchema),
+  rounds: v.optional(ImplementRoundsPartialSchema),
+});
+export type ImplementPartial = v.InferOutput<typeof ImplementPartialSchema>;
+
 export const LimitsPartialSchema = v.object({
   /** Hard ceiling on tool-calling turns. The run is stopped if it's exceeded. */
   max_turns: v.optional(v.number()),
@@ -450,6 +489,7 @@ export const CrabdConfigPartialSchema = v.object({
   permissions: v.optional(PermissionsPartialSchema),
   appearance: v.optional(AppearancePartialSchema),
   review: v.optional(ReviewPartialSchema),
+  implement: v.optional(ImplementPartialSchema),
   web_search: v.optional(WebSearchPartialSchema),
   context: v.optional(ContextPartialSchema),
   memory: v.optional(MemoryPartialSchema),
@@ -498,6 +538,17 @@ export const DEFAULT_CONFIG: CrabdConfigPartial = {
       enabled: false,
       min_confidence: REVIEW_VERIFY_MIN_CONFIDENCE_DEFAULT,
       max_concurrency: REVIEW_VERIFY_MAX_CONCURRENCY_DEFAULT,
+    },
+  },
+  implement: {
+    branch_prefix: IMPLEMENT_BRANCH_PREFIX_DEFAULT,
+    // No commands by default: what verifies a change is repo-specific, and a wrong guess costs a
+    // failed round rather than nothing.
+    verify: { commands: [] },
+    rounds: {
+      enabled: true,
+      resolve_threads: true,
+      max_threads: IMPLEMENT_MAX_THREADS_DEFAULT,
     },
   },
   web_search: {

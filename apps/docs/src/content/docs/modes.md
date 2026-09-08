@@ -73,10 +73,92 @@ of it.
 
 ## implement
 
+This mode has two phases. On an issue it writes the change and opens a pull request. On a pull
+request it works a **feedback round**: it reads the open review conversations, makes the change,
+commits onto that pull request's branch, and answers every conversation it saw.
+
+### From an issue
+
 **Triggered by** an issue being assigned or labeled, or by a comment like `/crabd implement`.
 
-crab'd plans the change, edits the repo, commits to a branch, and opens a pull request whose title
-and body it writes.
+crab'd plans the change, edits the repo, commits to a branch named `crabd/...`, and opens a pull
+request whose title and body it writes. The description carries a hidden marker, which is how later
+runs know the pull request is crab'd's own.
+
+### A feedback round
+
+**Triggered by** a submitted review or an inline review comment on a pull request crab'd opened, or
+by a comment like `/crabd implement address the review` on any pull request crab'd can write to.
+
+A round sees everything that is open, not just the comment that triggered it: every unresolved
+review conversation, the bodies of the submitted reviews, and the failing checks on the head commit
+with a tail of their logs. crab'd then commits one change onto the existing branch and accounts for
+each conversation with one of six outcomes:
+
+- **fixed**: the code changed in this commit.
+- **already fixed**: the code already did this, or an earlier commit handled it.
+- **partly done**: some of it is done, and the rest is explained.
+- **declined**: deliberately not doing it, with a reason.
+- **answered**: it was a question, and here is the answer.
+- **needs clarification**: crab'd could not act without knowing something.
+
+crab'd is told it may push back. A reviewer can be wrong about the code, and a round that complies
+anyway makes the pull request worse. It declines only with a reason: the comment is wrong about what
+the code does, the change would break a named caller or contract, or it is outside what this pull
+request is for. Style and naming preferences are not grounds to decline.
+
+A round never retitles the pull request, never creates a second branch, and never rewrites history.
+
+### What each forge can do
+
+| | GitHub | Forgejo v16 |
+| --- | --- | --- |
+| Round from a comment mention | yes | yes |
+| Round from a submitted review | yes | no such trigger event |
+| Round from an inline review comment | yes | no such trigger event |
+| Reply inside each conversation | yes | one summary comment instead |
+| Resolve the conversations it fixed | yes | no API for it |
+| Read the failing checks and their logs | yes | yes |
+
+Forgejo Actions has no `pull_request_review` or `pull_request_review_comment` trigger, so a review
+submitted on Forgejo cannot start a run. Comment `/crabd implement address the review` instead. The
+round then reads the same conversations and does the same work. Its replies arrive as one comment
+listing each conversation and its outcome, because the Forgejo API cannot post inside a
+conversation or resolve one.
+
+### Verifying a change
+
+Name the commands that decide whether a change is sound, and crab'd runs them before it answers and
+reports each one:
+
+```yaml title=".crabd.yml"
+implement:
+  verify:
+    commands:
+      - pnpm typecheck
+      - pnpm test
+```
+
+A failure is disclosed on the pull request and does not block the commit. The checks on the pull
+request are the gate that does. These commands accumulate across config layers, so a command an
+organization pins cannot be dropped by a repository.
+
+### Fork pull requests
+
+crab'd cannot write to a branch in another repository, so a round on a fork pull request commits
+nothing. It posts its answer and lists the files it would have changed, for you to apply.
+
+### Turning rounds off
+
+Rounds are on by default. Switch off the automatic triggers and keep the mention:
+
+```yaml title=".crabd.yml"
+implement:
+  rounds:
+    enabled: false
+```
+
+See the [config reference](/reference/config-yaml/#implement) for the rest of the block.
 
 ## Steering with post-mention text
 

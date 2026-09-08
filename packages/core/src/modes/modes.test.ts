@@ -10,13 +10,15 @@ import type {
   ForgeEvent,
   PullRequestRef,
   ReviewSubmission,
+  ReviewThreadSummary,
   TrackingComment,
 } from '../forge/types.ts';
 import { registerBuiltinModes } from './builtins.ts';
 import { getMode, listModes } from './registry.ts';
 import { applyFindingGates, reviewMode, type ReviewFinding } from './review.ts';
 import { commitWorkingChanges } from './shared.ts';
-import { DEFAULT_BRANDING, renderResult, renderWorking } from '../report/tracking.ts';
+import { BranchMovedError } from '../forge/commit-guard.ts';
+import { DEFAULT_BRANDING, PR_MARKER, renderResult, renderWorking } from '../report/tracking.ts';
 
 registerBuiltinModes();
 
@@ -33,6 +35,10 @@ function fakeAdapter(overrides: Partial<ForgeAdapter> = {}): ForgeAdapter {
     updateTrackingComment: vi.fn(async () => {}),
     replyToReviewComment: vi.fn(async () => {}),
     postReview: vi.fn(async () => {}),
+    listReviewThreads: vi.fn(async () => []),
+    listReviews: vi.fn(async () => []),
+    resolveReviewThread: vi.fn(async () => true),
+    listChecks: vi.fn(async () => ({ available: true, checks: [] })),
     commitToBranch: vi.fn(async () => {}),
     openOrUpdatePR: vi.fn(async (): Promise<PullRequestRef> => ({ number: 2, url: 'http://pr/2' })),
     readOrgConfig: vi.fn(async () => undefined),
@@ -521,6 +527,343 @@ describe('mention mode finalize', () => {
     });
     expect(adapter.commitToBranch).not.toHaveBeenCalled();
     expect(result.summary).toBe('It parses the header.');
+  });
+});
+
+describe('implement mode', () => {
+  let dirty: string;
+  beforeAll(() => {
+    dirty = mkdtempSync(join(tmpdir(), 'crabd-implement-'));
+    execFileSync('git', ['init', '-q'], { cwd: dirty });
+    writeFileSync(join(dirty, 'edited.ts'), 'export const a = 1;\n');
+  });
+  afterAll(() => rmSync(dirty, { recursive: true, force: true }));
+
+  const thread = (over: Partial<ReviewThreadSummary> = {}): ReviewThreadSummary => ({
+    id: 'T1',
+    rootCommentId: 101,
+    path: 'src/a.ts',
+    line: 12,
+    isResolved: false,
+    rootIsCrabd: false,
+    comments: [{ id: 101, author: 'dev', body: 'this leaks', createdAt: '' }],
+    ...over,
+  });
+
+  const config = (over: Record<string, unknown> = {}) =>
+    resolveConfig({ layers: { repo: { permissions: { secret_scan: false }, ...over } } });
+
+  const roundContext = (over: Partial<ForgeContext> = {}): ForgeContext => ({
+    ...baseContext,
+    reviewThreads: [thread()],
+    ...over,
+  });
+
+  const roundData = (over: Partial<Record<string, unknown>> = {}) => ({
+    kind: 'round' as const,
+    summary: 'Fixed the leak.',
+    commit_message: 'fix(a): close the handle',
+    threads: [{ thread_id: 'T1', outcome: 'fixed' as const, reply: 'Closed it in `finally`.' }],
+    ...over,
+  });
+
+  const runRound = (
+    over: {
+      context?: ForgeContext;
+      data?: Record<string, unknown>;
+      kind?: 'github' | 'forgejo';
+      config?: Record<string, unknown>;
+      cwd?: string;
+      adapterOverrides?: Partial<ForgeAdapter>;
+    } = {},
+  ) => {
+    const adapter = fakeAdapter({
+      ...(over.kind === 'forgejo' ? { kind: 'forgejo' as const } : {}),
+      ...(over.adapterOverrides ?? {}),
+    });
+    return getMode('implement')!
+      .finalize({
+        adapter,
+        config: config(over.config),
+        event: { ...baseEvent, kind: 'pull_request_review', action: 'submitted' },
+        context: over.context ?? roundContext(),
+        trigger: { mode: 'implement', explicit: true },
+        cwd: over.cwd ?? dirty,
+        baseline: new Map(),
+        data: over.data ?? roundData(),
+      })
+      .then((result) => ({ result, adapter }));
+  };
+
+  describe('round phase', () => {
+    it('commits to the pull request head branch with its own base', async () => {
+      const { adapter } = await runRound();
+      expect(adapter.commitToBranch).toHaveBeenCalledWith(
+        expect.objectContaining({ branch: 'feat', baseBranch: 'main', expectedParentSha: 'sha', message: 'fix(a): close the handle' }),
+      );
+    });
+
+    it('never opens a pull request, and never retitles one', async () => {
+      const { adapter } = await runRound();
+      expect(adapter.openOrUpdatePR).not.toHaveBeenCalled();
+    });
+
+    it('replies in the thread and resolves what it fixed', async () => {
+      const { adapter, result } = await runRound();
+      expect(adapter.replyToReviewComment).toHaveBeenCalledWith(5, 101, expect.stringContaining('Closed it in `finally`.'));
+      expect(adapter.resolveReviewThread).toHaveBeenCalledWith('T1');
+      expect(result.handledThreadReplies).toBe(true);
+      expect(result.trackingComment).toContain('1 conversation answered, 1 resolved');
+    });
+
+    it('does not resolve a thread it declined', async () => {
+      const { adapter } = await runRound({
+        data: roundData({ threads: [{ thread_id: 'T1', outcome: 'declined', reply: 'The caller already guards this.' }] }),
+      });
+      expect(adapter.replyToReviewComment).toHaveBeenCalledTimes(1);
+      expect(adapter.resolveReviewThread).not.toHaveBeenCalled();
+    });
+
+    it('leaves threads alone when resolve_threads is off', async () => {
+      const { adapter } = await runRound({ config: { implement: { rounds: { resolve_threads: false } } } });
+      expect(adapter.replyToReviewComment).toHaveBeenCalledTimes(1);
+      expect(adapter.resolveReviewThread).not.toHaveBeenCalled();
+    });
+
+    it('on a forge without threading, puts the answers in the comment that actually gets posted', async () => {
+      const { adapter, result } = await runRound({ kind: 'forgejo' });
+      expect(adapter.replyToReviewComment).not.toHaveBeenCalled();
+      expect(adapter.resolveReviewThread).not.toHaveBeenCalled();
+      // `trackingComment` is what `finalizeRun` posts; `summary` only reaches the CI output.
+      expect(result.trackingComment).toContain('`src/a.ts:12`');
+      expect(result.trackingComment).toContain('**fixed**');
+      expect(result.trackingComment).toMatch(/no API for resolving/);
+      expect(result.handledThreadReplies).toBe(true);
+    });
+
+    it('keeps the tracking comment short when the answers went into the conversations', async () => {
+      const { result } = await runRound();
+      expect(result.trackingComment).not.toContain('**fixed**');
+      expect(result.trackingComment).toContain('1 conversation answered');
+    });
+
+    it('reports a reply failure instead of claiming the conversations were answered', async () => {
+      const { result } = await runRound({
+        adapterOverrides: {
+          replyToReviewComment: vi.fn(async () => {
+            throw new Error('403 Resource not accessible');
+          }),
+        },
+      });
+      expect(result.trackingComment).toMatch(/could not reply on `src\/a\.ts:12`/);
+      expect(result.trackingComment).toContain('403');
+    });
+
+    it('refuses without failing the run when the branch moved under it', async () => {
+      const { result } = await runRound({
+        adapterOverrides: {
+          commitToBranch: vi.fn(async () => {
+            throw new BranchMovedError('crabd: refusing to commit: `feat` moved from aaaaaaaa to bbbbbbbb during this run.');
+          }),
+        },
+      });
+      expect(result.summary).toMatch(/moved from aaaaaaaa to bbbbbbbb/);
+      expect(result.summary).toMatch(/Ask again/);
+      expect(result.trackingComment).toMatch(/moved from/);
+    });
+
+    it('refuses when the pull request reports no head commit', async () => {
+      const context = roundContext({ pullRequest: { ...baseContext.pullRequest!, headSha: '' } });
+      const { adapter, result } = await runRound({ context });
+      expect(adapter.commitToBranch).not.toHaveBeenCalled();
+      expect(result.summary).toMatch(/no head commit/);
+    });
+
+    it('resolves an already-fixed conversation even though it committed nothing', async () => {
+      const clean = mkdtempSync(join(tmpdir(), 'crabd-clean-resolve-'));
+      execFileSync('git', ['init', '-q'], { cwd: clean });
+      const { adapter } = await runRound({
+        cwd: clean,
+        data: roundData({ threads: [{ thread_id: 'T1', outcome: 'already-fixed', reply: 'Handled in abc1234.' }] }),
+      });
+      expect(adapter.commitToBranch).not.toHaveBeenCalled();
+      expect(adapter.resolveReviewThread).toHaveBeenCalledWith('T1');
+      rmSync(clean, { recursive: true, force: true });
+    });
+
+    it('never touches the pull request description, even when the model supplies one', async () => {
+      const { adapter } = await runRound({ data: roundData({ pr_body: 'a rewritten description' }) });
+      expect(adapter.openOrUpdatePR).not.toHaveBeenCalled();
+    });
+
+    it('refuses to commit to a fork, and says what it would have changed', async () => {
+      const context = roundContext({
+        pullRequest: { ...baseContext.pullRequest!, fromFork: true, headRepoSlug: 'someone/app' },
+      });
+      const { adapter, result } = await runRound({ context });
+      expect(adapter.commitToBranch).not.toHaveBeenCalled();
+      expect(adapter.replyToReviewComment).not.toHaveBeenCalled();
+      expect(result.summary).toContain('someone/app');
+      expect(result.summary).toContain('edited.ts');
+    });
+
+    it('refuses to commit from a checkout that is not the pull request head', async () => {
+      const { adapter, result } = await runRound({ context: roundContext() , data: roundData() });
+      expect(adapter.commitToBranch).toHaveBeenCalled();
+      const stale = await getMode('implement')!.finalize({
+        adapter: fakeAdapter(),
+        config: config(),
+        event: { ...baseEvent, kind: 'pull_request_review', action: 'submitted' },
+        context: roundContext(),
+        trigger: { mode: 'implement', explicit: true },
+        cwd: dirty,
+        baseline: new Map(),
+        workspace: { status: '', recentCommits: [], containsPrHead: false },
+        data: roundData(),
+      });
+      expect(stale.summary).toMatch(/not this pull request's head commit/);
+      expect(result.summary).toBe('Fixed the leak.');
+    });
+
+    it('still answers the threads when there was nothing to commit', async () => {
+      const clean = mkdtempSync(join(tmpdir(), 'crabd-clean-'));
+      execFileSync('git', ['init', '-q'], { cwd: clean });
+      const { adapter, result } = await runRound({
+        cwd: clean,
+        data: roundData({
+          threads: [{ thread_id: 'T1', outcome: 'answered', reply: 'It is handled by the router.' }],
+          no_changes_reason: 'The thread was a question.',
+        }),
+      });
+      expect(adapter.commitToBranch).not.toHaveBeenCalled();
+      expect(adapter.replyToReviewComment).toHaveBeenCalledTimes(1);
+      expect(result.summary).toMatch(/nothing was committed/);
+      rmSync(clean, { recursive: true, force: true });
+    });
+
+    it('discloses a failed verification without blocking the commit', async () => {
+      const { adapter, result } = await runRound({
+        data: roundData({
+          verification: [
+            { command: 'pnpm test', status: 'failed', detail: '1 failing' },
+            { command: 'pnpm typecheck', status: 'passed' },
+          ],
+        }),
+      });
+      expect(adapter.commitToBranch).toHaveBeenCalledTimes(1);
+      expect(result.summary).toContain('❌ `pnpm test`');
+      expect(result.summary).toContain('✅ `pnpm typecheck`');
+      expect(result.summary).toMatch(/does not block the commit/);
+    });
+
+    it('ignores an answer for a thread that is not open', async () => {
+      const { adapter } = await runRound({
+        data: roundData({ threads: [{ thread_id: 'nope', outcome: 'fixed', reply: 'done' }] }),
+      });
+      expect(adapter.replyToReviewComment).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('issue phase', () => {
+    const runIssue = (over: Record<string, unknown> = {}) => {
+      const adapter = fakeAdapter();
+      return getMode('implement')!
+        .finalize({
+          adapter,
+          config: config(),
+          event: { ...baseEvent, kind: 'issues', action: 'assigned', pullRequest: undefined },
+          context: { ...baseContext, pullRequest: undefined, issue: { number: 9, title: 'T', body: 'B', author: 'dev', labels: [], state: 'open' } },
+          trigger: { mode: 'implement', explicit: true },
+          cwd: dirty,
+          baseline: new Map(),
+          data: { kind: 'issue', summary: 'Added it.', pr_title: 'feat: add it', pr_body: 'Closes #9', branch: 'my-branch', ...over },
+        })
+        .then((result) => ({ result, adapter }));
+    };
+
+    it('forces the branch prefix and marks the pull request as its own', async () => {
+      const { adapter } = await runIssue();
+      expect(adapter.commitToBranch).toHaveBeenCalledWith(expect.objectContaining({ branch: 'crabd/my-branch' }));
+      expect(adapter.openOrUpdatePR).toHaveBeenCalledWith(
+        expect.objectContaining({ headBranch: 'crabd/my-branch', body: expect.stringContaining(PR_MARKER) }),
+      );
+    });
+
+    it('keeps a branch that already carries the prefix', async () => {
+      const { adapter } = await runIssue({ branch: 'crabd/implement-9' });
+      expect(adapter.commitToBranch).toHaveBeenCalledWith(expect.objectContaining({ branch: 'crabd/implement-9' }));
+    });
+  });
+
+  describe('validate', () => {
+    const validate = (data: Record<string, unknown>, ctx: Record<string, unknown> = {}) =>
+      getMode('implement')!.validate!(data, {
+        changedPaths: [],
+        anchorable: new Map(),
+        cwd: '/tmp',
+        ...ctx,
+      });
+
+    it('accepts a well-formed round', () => {
+      expect(validate(roundData(), { subjectKind: 'pull_request', threadIds: ['T1'] })).toEqual({ ok: true });
+    });
+
+    it('rejects the wrong phase, naming the right one', () => {
+      const result = validate({ kind: 'issue', summary: 's', pr_title: 't', pr_body: 'b', branch: 'x' }, { subjectKind: 'pull_request' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.repairPrompt).toContain('kind: "round"');
+    });
+
+    it('rejects an unknown thread id and lists the legal ones', () => {
+      const result = validate(roundData({ threads: [{ thread_id: 'T9', outcome: 'fixed', reply: 'r' }] }), {
+        subjectKind: 'pull_request',
+        threadIds: ['T1', 'T2'],
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.repairPrompt).toContain('T1, T2');
+    });
+
+    it('rejects a round that left a thread unanswered', () => {
+      const result = validate(roundData(), { subjectKind: 'pull_request', threadIds: ['T1', 'T2'] });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.repairPrompt).toContain('T2');
+    });
+
+    it('rejects a duplicate thread answer', () => {
+      const result = validate(
+        roundData({
+          threads: [
+            { thread_id: 'T1', outcome: 'fixed', reply: 'a' },
+            { thread_id: 'T1', outcome: 'declined', reply: 'b' },
+          ],
+        }),
+        { subjectKind: 'pull_request', threadIds: ['T1'] },
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.repairPrompt).toMatch(/appears twice/);
+    });
+
+    it('rejects a round with no commit message', () => {
+      const result = validate(roundData({ commit_message: '' }), { subjectKind: 'pull_request', threadIds: ['T1'] });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.repairPrompt).toContain('commit_message');
+    });
+
+    it('rejects an unreported verification command', () => {
+      const result = validate(roundData(), {
+        subjectKind: 'pull_request',
+        threadIds: ['T1'],
+        verifyCommands: ['pnpm test'],
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.repairPrompt).toContain('pnpm test');
+    });
+
+    it('requires the pull request fields on the issue phase', () => {
+      const result = validate({ kind: 'issue', summary: 's' }, { subjectKind: 'issue' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.repairPrompt).toContain('pr_title');
+    });
   });
 });
 

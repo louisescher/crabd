@@ -1,12 +1,20 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ResolvedConfig, ReviewDimension } from '@crabd/config';
-import type { ForgeChangedFile, ForgeContext, ForgeEvent } from '../forge/types.ts';
+import type {
+  ChecksSummary,
+  ForgeChangedFile,
+  ForgeContext,
+  ForgeEvent,
+  ForgeReview,
+  ReviewThreadSummary,
+} from '../forge/types.ts';
 import type { WorkspaceState } from '../git/workspace.ts';
+import type { ImplementPhase } from '../forge/ownership.ts';
 import { describeCommentableLines, type AnchorableFile } from './diff-lines.ts';
 import { splitSections } from './diff-parse.ts';
 import type { ProjectContext } from './project.ts';
-import { FINDING_MARKER, MEMORY_MARKER, TRACKING_MARKER } from '../report/tracking.ts';
+import { CRABD_MARKERS, FINDING_MARKER, isCrabdAuthored, MEMORY_MARKER, TRACKING_MARKER } from '../report/tracking.ts';
 import type { TriggerResult } from '../trigger/detect.ts';
 
 /** Built-in base system prompt per non-review built-in mode. Overridable via full prompt override. */
@@ -389,8 +397,81 @@ const READ_ONLY_NOTE = [
   'When a change is the right answer, describe it: name the file and the lines, and show the code in a fenced block in your response so a human can apply it.',
 ].join(' ');
 
-function baseInstructions(mode: string, config: ResolvedConfig, forge: string): string {
-  const base = mode === 'review' ? reviewPrompt(config.review) : (BASE_PROMPTS[mode] ?? GENERIC_BASE);
+const ROUND_ROLE = [
+  "You are crab'd, an autonomous coding agent working on an open pull request that a human is reviewing.",
+  'Your commit lands on the branch under review, so the smallest change that answers the feedback is the right one.',
+].join(' ');
+
+const ROUND_METHOD = [
+  '## How to work a round',
+  '1. Read every open conversation and every submitted review below before changing anything.',
+  '2. Open the real file at each anchor. The hunk quoted in a thread is a lead, not the current code.',
+  '3. Where several threads want the same change, make it once and say so in each of them.',
+  '4. Run the checks you were given, if any.',
+  '5. Answer every thread. One entry each, with its id copied exactly as it appears.',
+].join('\n');
+
+const ROUND_THREAD_CONTRACT = [
+  '## Answering a conversation',
+  'Each open thread gets exactly one entry, with an `outcome` and a `reply` addressed to the reviewer:',
+  '- `fixed`: you changed the code in this commit and it now does what they asked.',
+  '- `already-fixed`: the code already did what they asked, or an earlier commit handled it. Say where.',
+  '- `partial`: you did some of it. Say which part, and what is left.',
+  '- `declined`: you are deliberately not doing it. Say why.',
+  '- `answered`: it was a question, not a change request. Answer it.',
+  '- `unclear`: you could not act without knowing something. Ask for exactly that.',
+  'Never mark something `fixed` that you did not change: the commit is right there and the reviewer will look.',
+  'Say what changed and where. Do not restate the reviewer\'s own comment back at them.',
+].join('\n');
+
+const ROUND_PUSHBACK = [
+  '## You may push back',
+  'A reviewer can be wrong about the code, and agreeing anyway makes the pull request worse.',
+  'Decline when the comment is factually wrong about what the code does (cite the file and line that shows it), when the change would break a caller or a published contract (name it), or when it is outside what this pull request is for.',
+  'Declining with a reason is a good outcome. Complying with something wrong is not, and neither is quietly skipping it.',
+  'Style and naming preferences are not worth declining. Make those changes.',
+].join('\n');
+
+const ROUND_SCOPE = [
+  '## Scope',
+  'Change only what a conversation asked for. No adjacent refactors, no reformatting, no drive-by fixes.',
+  "Never revert or rewrite the reviewer's own commits.",
+  'You cannot create a branch, force-push, rewrite history, or change the pull request title or description. One commit lands on the existing branch.',
+].join('\n');
+
+function verificationBlock(commands: string[]): string {
+  if (commands.length === 0) return '';
+  return [
+    '## Checks you must run',
+    'Run each of these from the repository root before you answer, and report every one in `verification` with its real outcome:',
+    ...commands.map((command) => `- \`${command}\``),
+    'A failure does not stop the commit and is disclosed on the pull request, so there is nothing to gain by hiding one.',
+    'A pass you did not watch happen is not a pass. If you could not run a command, report it as `not-run` and say why.',
+  ].join('\n');
+}
+
+function implementRoundPrompt(config: ResolvedConfig): string {
+  return [
+    ROUND_ROLE,
+    ROUND_METHOD,
+    ROUND_THREAD_CONTRACT,
+    ROUND_PUSHBACK,
+    ROUND_SCOPE,
+    verificationBlock(config.implement.verify.commands),
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function baseInstructions(mode: string, config: ResolvedConfig, forge: string, phase?: ImplementPhase): string {
+  const base =
+    mode === 'review'
+      ? reviewPrompt(config.review)
+      : mode === 'implement' && phase === 'round'
+        ? implementRoundPrompt(config)
+        : mode === 'implement'
+          ? [BASE_PROMPTS.implement, verificationBlock(config.implement.verify.commands)].filter(Boolean).join('\n\n')
+          : (BASE_PROMPTS[mode] ?? GENERIC_BASE);
   const readOnly = config.permissions.write ? '' : `\n${READ_ONLY_NOTE}`;
   return `${base}\n\n${VOICE_NOTE}\n${NO_HARNESS_TALK}\n${environmentNote(config.repos, forge)}${readOnly}`;
 }
@@ -425,6 +506,17 @@ const TRIGGER_COMMENT_BUDGET = 4_000;
 const COMMENT_BODY_BUDGET = 2_000;
 /** Char budget for the diff hunk an inline review thread hangs off. */
 const THREAD_HUNK_BUDGET = 2_000;
+/** Char budget for one open review conversation, and for the whole feedback section. */
+const ROUND_THREAD_BUDGET = 2_000;
+const ROUND_FEEDBACK_BUDGET = 24_000;
+/** Floors for the shared-out budget, so a run with many threads still says something useful. */
+const MIN_THREAD_SHARE = 600;
+const MIN_COMMENT_SHARE = 200;
+/** Char budget for one submitted review's body. */
+const ROUND_REVIEW_BODY_BUDGET = 3_000;
+/** Char budgets for the CI section: one job's log tail, then the section. */
+const CHECK_LOG_BUDGET = 4_000;
+const CHECKS_BUDGET = 12_000;
 
 /**
  * Low-signal files whose diff bodies are dropped from the compressed diff: lockfiles and
@@ -795,6 +887,81 @@ export function renderFileContents(
 }
 
 /**
+ * The open review conversations, each headed by the id the model must copy into its answer.
+ *
+ * Resolution state is not rendered per thread: only unresolved threads are collected, so every
+ * thread here is open by construction, and saying so on each one is noise.
+ */
+function renderOpenFeedback(threads: ReviewThreadSummary[] | undefined, omitted = 0): string {
+  if (!threads || threads.length === 0) return '';
+  // Shared out rather than spent first-come: the mode requires an answer for every thread it was
+  // given, so dropping the tail would ask the model for something the prompt never showed it.
+  const share = Math.max(MIN_THREAD_SHARE, Math.floor(ROUND_FEEDBACK_BUDGET / threads.length));
+  const blocks = threads.map((thread) => {
+    const anchor = thread.line === undefined ? `\`${thread.path}\`` : `\`${thread.path}:${thread.line}\``;
+    const stale = thread.isOutdated ? ' (the diff has moved past this line)' : '';
+    const hunk = thread.diffHunk ? `\n${fence(truncate(thread.diffHunk, Math.min(THREAD_HUNK_BUDGET, share)))}` : '';
+    const perComment = Math.max(MIN_COMMENT_SHARE, Math.floor(share / Math.max(1, thread.comments.length)));
+    const conversation = thread.comments
+      .map((comment) => {
+        const who = isCrabdAuthored(comment.body) ? "crab'd (you, earlier)" : comment.author;
+        return `**${who}:** ${truncate(stripMarkers(comment.body), Math.min(ROUND_THREAD_BUDGET, perComment))}`;
+      })
+      .join('\n\n');
+    return `### ${thread.id} (${anchor})${stale}${hunk}\n\n${conversation}`;
+  });
+  const overflow =
+    omitted > 0
+      ? `\n\n${omitted} further open conversation(s) are not shown, because this run is capped at ${threads.length}. Say in your summary that they are unaddressed.`
+      : '';
+  return `## Open review feedback (${blocks.length})\nAnswer every one of these, using the id in the heading verbatim.\n\n${blocks.join('\n\n')}${overflow}`;
+}
+
+const ACTIONABLE_REVIEW_STATES = new Set(['changes_requested', 'commented']);
+
+function renderSubmittedReviews(reviews: ForgeReview[] | undefined, triggerReviewId?: number): string {
+  const withBody = (reviews ?? [])
+    .filter((review) => review.body.trim().length > 0)
+    .filter((review) => ACTIONABLE_REVIEW_STATES.has(review.state))
+    .filter((review) => review.id !== triggerReviewId)
+    .slice(-10);
+  if (withBody.length === 0) return '';
+  const blocks = withBody.map((review) => {
+    const who = isCrabdAuthored(review.body) ? "crab'd (you, earlier)" : review.author;
+    return `**${who}** (${review.state.replace(/_/g, ' ')}): ${truncate(stripMarkers(review.body), ROUND_REVIEW_BODY_BUDGET)}`;
+  });
+  return `## Submitted reviews\n${blocks.join('\n\n')}`;
+}
+
+/**
+ * Failing and pending checks for the head commit, with a log tail where one was readable. Passing
+ * checks are counted rather than listed: a green check is not something to act on.
+ */
+function renderChecks(checks: ChecksSummary | undefined, headSha: string | undefined): string {
+  if (!checks?.available || checks.checks.length === 0) return '';
+  const interesting = checks.checks.filter((check) => check.conclusion === 'failure' || check.conclusion === 'pending');
+  const passing = checks.checks.filter((check) => check.conclusion === 'success').length;
+  if (interesting.length === 0) {
+    return passing > 0 ? `## Continuous integration\nAll ${passing} check(s) on \`${headSha ?? 'the head commit'}\` are passing.` : '';
+  }
+  const blocks: string[] = [];
+  let spent = 0;
+  for (const check of interesting) {
+    const log = check.logTail ? `\n${fence(truncate(check.logTail, CHECK_LOG_BUDGET))}` : '';
+    const block = `### ${check.name} (${check.conclusion})${check.url ? ` ([logs](${check.url}))` : ''}${log}`;
+    if (spent + block.length > CHECKS_BUDGET && blocks.length > 0) continue;
+    spent += block.length;
+    blocks.push(block);
+  }
+  const lead = [
+    `## Continuous integration for \`${headSha ?? 'the head commit'}\``,
+    `${interesting.length} check(s) need attention${passing > 0 ? `, ${passing} passing` : ''}.`,
+    'Fix a failure a conversation asked about, or one your own change caused. Leave the rest and say what you left.',
+  ].join('\n');
+  return `${lead}\n\n${blocks.join('\n\n')}`;
+}
+
+/**
  * Render the fetched forge context into a readable markdown block for the model. `fullDiff` (from
  * `context.full_diff`, off by default) sends the whole diff; otherwise the diff is compressed.
  */
@@ -808,6 +975,8 @@ function renderContext(
   /** Checkout root, needed to read the changed files. Omitted = skip the file-contents section. */
   cwd?: string,
   includeFileContents = false,
+  /** A feedback round gets the open-conversation, submitted-review and CI sections. */
+  round = false,
 ): string {
   const lines: string[] = [];
   lines.push(`## Repository\n${context.repo.slug} (default branch: ${context.repo.defaultBranch})`);
@@ -835,7 +1004,7 @@ function renderContext(
     lines.push(`## Diff\n${rendered}`);
   }
 
-  if ((review || includeFileContents) && context.diff) {
+  if ((review || round || includeFileContents) && context.diff) {
     // Never send file contents from a tree that doesn't contain the change. They would be the
     // pre-change version of every file, under line numbers the diff's don't match, which is worse
     // than sending nothing because the model has no way to tell they are stale.
@@ -848,6 +1017,15 @@ function renderContext(
       const anchors = renderAnchorableLines(describeCommentableLines(context.diff));
       if (anchors) lines.push(anchors);
     }
+  }
+
+  if (round) {
+    const feedback = renderOpenFeedback(context.reviewThreads, context.omittedThreads ?? 0);
+    if (feedback) lines.push(feedback);
+    const reviews = renderSubmittedReviews(context.reviews, event.review?.id);
+    if (reviews) lines.push(reviews);
+    const checks = renderChecks(context.checks, context.pullRequest?.headSha);
+    if (checks) lines.push(checks);
   }
 
   // The triggering comment is rendered in full under its own header below; drop it here so it isn't
@@ -922,7 +1100,7 @@ function renderReplyThread(thread: ForgeContext['replyThread'], triggerId: numbe
 
 /** Drop crab'd's hidden comment markers so they never reach the model as content. */
 function stripMarkers(body: string): string {
-  return body.split(FINDING_MARKER).join('').split(TRACKING_MARKER).join('').split(MEMORY_MARKER).join('').trim();
+  return CRABD_MARKERS.reduce((text, marker) => text.split(marker).join(''), body).trim();
 }
 
 export interface AssembleOptions {
@@ -944,6 +1122,8 @@ export interface AssembleOptions {
    */
   cwd?: string;
   memoryEligible?: boolean;
+  /** Which phase of `implement` this run is, when that is the mode. */
+  phase?: ImplementPhase;
 }
 
 /**
@@ -1014,14 +1194,23 @@ function renderProjectContext(project: ProjectContext | undefined): string[] {
 export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
   const { mode, config, context, event, trigger, project, workspace, cwd, memoryEligible } = options;
 
-  const base = config.prompt.override ?? baseInstructions(mode, config, event.forge);
+  const base = config.prompt.override ?? baseInstructions(mode, config, event.forge, options.phase);
   const appends = [config.prompt.instructions, config.modes[mode]?.instructions].filter(
     (s): s is string => Boolean(s && s.trim()),
   );
   const instructions = [base, ...appends, ...renderProjectContext(project)].join('\n\n');
 
   const parts = [
-    renderContext(context, event, config.context.fullDiff, workspace, mode === 'review', cwd, memoryEligible ?? false),
+    renderContext(
+      context,
+      event,
+      config.context.fullDiff,
+      workspace,
+      mode === 'review',
+      cwd,
+      memoryEligible ?? false,
+      options.phase === 'round',
+    ),
   ];
   if (trigger.userInstruction) {
     parts.push(`## Instruction from the user\n${trigger.userInstruction}`);

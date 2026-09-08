@@ -73,7 +73,13 @@ export interface TurnInput {
   /** The mode's system instructions, resolved by the caller. */
   instructions: string;
   images?: string[];
-  validation?: { changedPaths: string[]; anchorable: { path: string; ranges: string[] }[] };
+  validation?: {
+    changedPaths: string[];
+    anchorable: { path: string; ranges: string[] }[];
+    subjectKind?: 'issue' | 'pull_request';
+    threadIds?: string[];
+    verifyCommands?: string[];
+  };
 }
 
 export interface TurnOutcome {
@@ -359,6 +365,9 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
         changedPaths: input.validation.changedPaths,
         anchorable: expandCommentableLines(input.validation.anchorable),
         cwd: ctx.cwd,
+        ...(input.validation.subjectKind ? { subjectKind: input.validation.subjectKind } : {}),
+        ...(input.validation.threadIds ? { threadIds: input.validation.threadIds } : {}),
+        ...(input.validation.verifyCommands ? { verifyCommands: input.validation.verifyCommands } : {}),
       }
     : undefined;
 

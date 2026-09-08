@@ -9,6 +9,7 @@ import type {
 } from '../forge/types.ts';
 import { registerBuiltinModes } from '../modes/builtins.ts';
 import { prepareRun, type ClassifyRequest } from './prepare.ts';
+import { DEFAULT_BRANDING, isRoundHandled, PR_MARKER, renderWorking } from '../report/tracking.ts';
 
 registerBuiltinModes();
 
@@ -36,6 +37,10 @@ function fakeAdapter(overrides: Partial<ForgeAdapter> = {}): ForgeAdapter {
     updateTrackingComment: vi.fn(async () => {}),
     replyToReviewComment: vi.fn(async () => {}),
     postReview: vi.fn(async () => {}),
+    listReviewThreads: vi.fn(async () => []),
+    listReviews: vi.fn(async () => []),
+    resolveReviewThread: vi.fn(async () => true),
+    listChecks: vi.fn(async () => ({ available: true, checks: [] })),
     commitToBranch: vi.fn(async () => {}),
     openOrUpdatePR: vi.fn(async (): Promise<PullRequestRef> => ({ number: 8, url: 'http://pr/8' })),
     readOrgConfig: vi.fn(async () => undefined),
@@ -340,5 +345,141 @@ describe('prepareRun idempotency guard', () => {
       cwd: '/nonexistent',
     });
     expect(outcome.status).toBe('run');
+  });
+});
+
+describe('prepareRun feedback rounds', () => {
+  const ownPr = {
+    number: 8, title: 'feat', body: `body\n\n${PR_MARKER}`, author: 'crabd', labels: [], state: 'open',
+    headRef: 'crabd/implement-3', baseRef: 'main', headSha: 'headsha', fromFork: false, isDraft: false,
+  };
+
+  const reviewEvent = (): ForgeEvent => ({
+    forge: 'github',
+    kind: 'pull_request_review',
+    action: 'submitted',
+    repo,
+    actor: { login: 'lescher', association: 'MEMBER', isBot: false },
+    pullRequest: ownPr,
+    review: { id: 90, state: 'changes_requested', body: 'needs work', author: 'lescher', submittedAt: '' },
+    comment: { id: 90, body: 'needs work', author: 'lescher', createdAt: '' },
+    raw: {},
+  });
+
+  const thread = {
+    id: 'T1', rootCommentId: 40, path: 'src/a.ts', line: 3, isResolved: false, rootIsCrabd: false,
+    comments: [{ id: 40, author: 'lescher', body: 'this leaks', createdAt: '' }],
+  };
+
+  const roundAdapter = (overrides: Partial<ForgeAdapter> = {}) =>
+    fakeAdapter({
+      getContext: vi.fn(async () => ({ repo, pullRequest: ownPr, comments: [], changedFiles: [] })),
+      listReviewThreads: vi.fn(async () => [thread]),
+      listReviews: vi.fn(async () => [
+        { id: 90, state: 'changes_requested' as const, body: 'needs work', author: 'lescher', submittedAt: '' },
+      ]),
+      ...overrides,
+    });
+
+  it('fetches the conversations, the reviews and the check state, and claims the round', async () => {
+    const adapter = roundAdapter();
+    const outcome = await prepareRun({ adapter, config: config(['MEMBER']), event: reviewEvent(), cwd: '/nonexistent' });
+    expect(outcome.status).toBe('run');
+    if (outcome.status !== 'run') return;
+    expect(adapter.listReviewThreads).toHaveBeenCalledWith(8);
+    expect(adapter.listChecks).toHaveBeenCalledWith('headsha');
+    expect(outcome.context.reviewThreads).toEqual([thread]);
+    expect(outcome.plan.verbKey).toBe('implement:round');
+    expect(outcome.plan.branding.roundClaim).toEqual({ headSha: 'headsha', feedbackToken: '90.40.1' });
+    const posted = vi.mocked(adapter.createTrackingComment).mock.calls[0]?.[1] ?? '';
+    expect(posted).toContain('addressing the feedback');
+    expect(isRoundHandled(posted, 'headsha', '90.40.1')).toBe(true);
+  });
+
+  it('skips a round another run already claimed', async () => {
+    const claimed = renderWorking(
+      { ...DEFAULT_BRANDING, roundClaim: { headSha: 'headsha', feedbackToken: '90.40.1' } },
+      'implement:round',
+    );
+    const adapter = roundAdapter({
+      findTrackingComment: vi.fn(async () => ({ id: 1, target: 8, body: claimed })),
+    });
+    const outcome = await prepareRun({ adapter, config: config(['MEMBER']), event: reviewEvent(), cwd: '/nonexistent' });
+    expect(outcome.status).toBe('skip');
+    if (outcome.status === 'skip') expect(outcome.reason).toMatch(/already handled/);
+  });
+
+  it('runs again once the feedback has moved on', async () => {
+    const claimed = renderWorking(
+      { ...DEFAULT_BRANDING, roundClaim: { headSha: 'headsha', feedbackToken: '90.40.1' } },
+      'implement:round',
+    );
+    const adapter = roundAdapter({
+      findTrackingComment: vi.fn(async () => ({ id: 1, target: 8, body: claimed })),
+      listReviewThreads: vi.fn(async () => [
+        { ...thread, comments: [...thread.comments, { id: 41, author: 'lescher', body: 'and this', createdAt: '' }] },
+      ]),
+    });
+    const outcome = await prepareRun({ adapter, config: config(['MEMBER']), event: reviewEvent(), cwd: '/nonexistent' });
+    expect(outcome.status).toBe('run');
+  });
+
+  it('never reacts to a submitted review, which has no reaction endpoint', async () => {
+    const adapter = roundAdapter();
+    await prepareRun({ adapter, config: config(['MEMBER']), event: reviewEvent(), cwd: '/nonexistent' });
+    expect(adapter.reactToComment).not.toHaveBeenCalled();
+  });
+
+  it('warns when it could not read the conversations, rather than committing blind in silence', async () => {
+    const adapter = roundAdapter({
+      listReviewThreads: vi.fn(async () => {
+        throw new Error('502 Bad Gateway');
+      }),
+    });
+    const outcome = await prepareRun({ adapter, config: config(['MEMBER']), event: reviewEvent(), cwd: '/nonexistent' });
+    expect(outcome.status).toBe('run');
+    if (outcome.status === 'run') {
+      expect(outcome.plan.branding.advisories?.join(' ')).toMatch(/could not read the review conversations/);
+    }
+  });
+
+  it('passes the missing-permission advisory through when the check state is unreadable', async () => {
+    const adapter = roundAdapter({
+      listChecks: vi.fn(async () => ({ available: false, reason: 'grant `checks: read`', checks: [] })),
+    });
+    const outcome = await prepareRun({ adapter, config: config(['MEMBER']), event: reviewEvent(), cwd: '/nonexistent' });
+    if (outcome.status === 'run') expect(outcome.plan.branding.advisories?.join(' ')).toContain('checks: read');
+  });
+
+  it('does not offer review as a candidate on a pull request crab\'d owns', async () => {
+    const adapter = roundAdapter();
+    const classify = vi.fn(async (_req: ClassifyRequest) => ({ mode: 'implement' }));
+    const inline: ForgeEvent = {
+      ...reviewEvent(),
+      kind: 'pull_request_review_comment',
+      action: 'created',
+      review: undefined,
+      comment: { id: 41, body: 'why did you do this?', author: 'lescher', createdAt: '' },
+    };
+    await prepareRun({ adapter, config: config(['MEMBER']), event: inline, cwd: '/nonexistent', classify });
+    expect(classify).toHaveBeenCalledOnce();
+    const req = classify.mock.calls[0]![0];
+    expect(req.candidates.map((c) => c.name).sort()).toEqual(['implement', 'mention']);
+    expect(req.subjectIsOwnPr).toBe(true);
+  });
+
+  it('leaves an ordinary pull request alone', async () => {
+    const adapter = roundAdapter({
+      getContext: vi.fn(async () => ({
+        repo,
+        pullRequest: { ...ownPr, body: 'a human wrote this', headRef: 'feat/theirs' },
+        comments: [],
+        changedFiles: [],
+      })),
+    });
+    const event = { ...reviewEvent(), pullRequest: { ...ownPr, body: 'a human wrote this', headRef: 'feat/theirs' } };
+    const outcome = await prepareRun({ adapter, config: config(['MEMBER']), event, cwd: '/nonexistent' });
+    expect(outcome.status).toBe('skip');
+    expect(adapter.listReviewThreads).not.toHaveBeenCalled();
   });
 });

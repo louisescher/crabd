@@ -11,7 +11,9 @@ import { getMode, listModes } from '../modes/registry.ts';
 import { subjectNumber } from '../modes/shared.ts';
 import { assertProvidersAllowed } from '../policy/providers.ts';
 import { authorizeActor } from '../policy/trust.ts';
-import { isCommentHandled, renderWorking, type CommentContext } from '../report/tracking.ts';
+import { isCommentHandled, isRoundHandled, renderWorking, type CommentContext, type HandledKind } from '../report/tracking.ts';
+import { implementPhase, isCrabdPullRequest } from '../forge/ownership.ts';
+import { attachRoundContext } from './round-context.ts';
 import { detectTrigger, type TriggerResult } from '../trigger/detect.ts';
 
 /** Forge tools that change the repository, dropped from a mode's toolset when writes are off. */
@@ -20,6 +22,8 @@ const WRITE_TOOLS = new Set(['commit', 'open_pr']);
 /** Everything the Flue phase needs to run one agent turn. */
 export interface RunPlan {
   mode: string;
+  /** Key for the verb in crab'd's own comments: the mode, or `implement:round` for a round. */
+  verbKey: string;
   model: string;
   thinkingLevel: ThinkingLevel;
   /** System instructions (base/override + layered appends). */
@@ -86,6 +90,8 @@ export interface ClassifyRequest {
   isPullRequest: boolean;
   /** Title of the issue/PR the comment is on, for light context. */
   subjectTitle?: string;
+  /** Whether crab'd opened the pull request the comment is on. */
+  subjectIsOwnPr?: boolean;
 }
 
 /**
@@ -181,15 +187,27 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
     }),
   );
 
-  const trigger = detectTrigger(event, { triggerPhrase: config.triggerPhrase, enabledModes, knownModes });
+  const trigger = detectTrigger(event, {
+    triggerPhrase: config.triggerPhrase,
+    enabledModes,
+    knownModes,
+    branchPrefix: config.implement.branchPrefix,
+    implementRounds: config.implement.rounds.enabled,
+  });
   if (!trigger) return { status: 'skip', reason: 'no trigger matched this event' };
 
+  const handledKind: HandledKind =
+    event.kind === 'pull_request_review'
+      ? 'review'
+      : event.kind === 'pull_request_review_comment'
+        ? 'review_comment'
+        : 'comment';
   if (event.comment) {
     const earlySubject = event.pullRequest?.number ?? event.issue?.number;
     if (earlySubject !== undefined) {
       try {
         const existing = await adapter.findTrackingComment(earlySubject);
-        if (isCommentHandled(existing?.body, event.comment.id)) {
+        if (isCommentHandled(existing?.body, event.comment.id, handledKind)) {
           warn(
             `duplicate trigger: comment ${event.comment.id} on #${earlySubject} was already claimed by a previous run, skipping. ` +
               'If this happens often, add a `concurrency:` block to the workflow that dispatches crabd.',
@@ -214,7 +232,9 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
 
   // Fast acknowledgment: react 👀 to the triggering comment so the user sees crab'd
   // picked it up immediately, before the slower context fetch and model run.
-  if (event.comment) {
+  // Skipped for a submitted review: neither forge has a reaction endpoint for one, and the id
+  // mirrored onto `event.comment` is a review id, which would address an unrelated comment.
+  if (event.comment && event.kind !== 'pull_request_review') {
     try {
       await adapter.reactToComment(event.comment.id, 'eyes', event.kind === 'pull_request_review_comment' ? 'review' : 'issue');
     } catch {
@@ -232,10 +252,14 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
   // out-of-set answer keeps the default mention.
   let resolvedTrigger = trigger;
   if (input.classify && event.comment && !trigger.explicit) {
-    const candidates = [...enabledModes].map((name) => ({
-      name,
-      description: getMode(name)?.description ?? name,
-    }));
+    const ownPr = isCrabdPullRequest(event.pullRequest, config.implement.branchPrefix);
+    const candidates = [...enabledModes]
+      // crab'd does not review its own work, so on its own pull request the mode is not offered.
+      .filter((name) => !(ownPr && name === 'review'))
+      .map((name) => ({
+        name,
+        description: getMode(name)?.description ?? name,
+      }));
     // Only classify when there is a real choice beyond just answering (mention).
     if (candidates.length > 1) {
       const subjectTitle = event.pullRequest?.title ?? event.issue?.title;
@@ -246,6 +270,7 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
           ...(trigger.userInstruction ? { instruction: trigger.userInstruction } : {}),
           isPullRequest: event.isPullRequest ?? event.kind === 'pull_request',
           ...(subjectTitle ? { subjectTitle } : {}),
+          ...(ownPr ? { subjectIsOwnPr: true } : {}),
         });
         if (decision && enabledModes.has(decision.mode)) {
           resolvedTrigger = { ...trigger, mode: decision.mode };
@@ -262,6 +287,33 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
   const context = await adapter.getContext(event);
   const subject = subjectNumber(context, event);
   if (subject === undefined) return { status: 'skip', reason: 'no issue or pull request to act on' };
+
+  // A feedback round needs the whole open conversation, not just its trigger, and the CI state for
+  // the head commit. Fetched here rather than in `getContext` because no other mode renders either.
+  const phase = resolvedTrigger.mode === 'implement' ? implementPhase(context, event) : undefined;
+  const inheritedAdvisories = [...(input.advisories ?? [])];
+  let roundClaim: { headSha: string; feedbackToken: string } | undefined;
+  if (phase === 'round' && context.pullRequest) {
+    const round = await attachRoundContext(adapter, context, {
+      maxThreads: config.implement.rounds.maxThreads,
+    });
+    inheritedAdvisories.push(...round.advisories);
+
+    // One submitted review arrives as N+1 events on GitHub (the review, plus one per inline
+    // comment). Claim the round on the newest piece of feedback so only the first run does the work
+    // and the rest see it already claimed.
+    const claim = { headSha: context.pullRequest.headSha, feedbackToken: round.feedbackToken };
+    try {
+      const existing = await adapter.findTrackingComment(subject);
+      if (isRoundHandled(existing?.body, claim.headSha, claim.feedbackToken)) {
+        return {
+          status: 'skip',
+          reason: `feedback round for ${claim.headSha.slice(0, 8)} was already handled by a previous run`,
+        };
+      }
+    } catch {}
+    roundClaim = claim;
+  }
 
   const modeCfg = config.modes[resolvedTrigger.mode];
   const model = modeCfg?.model ?? config.model;
@@ -301,7 +353,7 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
     },
   });
 
-  const { memory, advisories } = resolveRunMemory(config, context, event, input.advisories ?? []);
+  const { memory, advisories } = resolveRunMemory(config, context, event, inheritedAdvisories);
 
   const prompt = assemblePrompt({
     mode: resolvedTrigger.mode,
@@ -313,26 +365,31 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
     workspace,
     cwd,
     memoryEligible: memory.writable,
+    ...(phase ? { phase } : {}),
   });
 
   const branding: CommentContext = {
     ...config.appearance,
     ...(advisories.length > 0 ? { advisories } : {}),
-    ...(event.comment ? { handledCommentId: event.comment.id } : {}),
+    ...(event.comment ? { handledCommentId: event.comment.id, handledKind } : {}),
+    ...(roundClaim ? { roundClaim } : {}),
   };
+
+  const verbKey = phase === 'round' ? `${resolvedTrigger.mode}:round` : resolvedTrigger.mode;
 
   // Reuse an existing crab'd comment on this subject (sticky) instead of stacking new ones.
   let tracking = await adapter.findTrackingComment(subject);
   if (tracking) {
-    await adapter.updateTrackingComment(tracking, renderWorking(branding, resolvedTrigger.mode));
+    await adapter.updateTrackingComment(tracking, renderWorking(branding, verbKey));
   } else {
-    tracking = await adapter.createTrackingComment(subject, renderWorking(branding, resolvedTrigger.mode));
+    tracking = await adapter.createTrackingComment(subject, renderWorking(branding, verbKey));
   }
 
   return {
     status: 'run',
     plan: {
       mode: resolvedTrigger.mode,
+      verbKey,
       model,
       thinkingLevel,
       instructions: prompt.instructions,

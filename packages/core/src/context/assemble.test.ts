@@ -879,3 +879,126 @@ describe('assemblePrompt: huge PRs', () => {
     expect(message).not.toContain('`src/file-639.ts`');
   });
 });
+
+describe('assemblePrompt: implement rounds', () => {
+  const pr = {
+    number: 4, title: 'Feature', body: 'body', author: 'crabd', labels: [], state: 'open',
+    headRef: 'crabd/implement-3', baseRef: 'main', headSha: 'deadbeef', fromFork: false, isDraft: false,
+  };
+
+  const roundContext: ForgeContext = {
+    repo,
+    pullRequest: pr,
+    comments: [],
+    changedFiles: [{ path: 'src/a.ts', status: 'modified', additions: 2, deletions: 1 }],
+    reviewThreads: [
+      {
+        id: 'PRRT_abc',
+        rootCommentId: 101,
+        path: 'src/a.ts',
+        line: 12,
+        diffHunk: '@@ -10,3 +10,4 @@\n+  const x = 1;',
+        isResolved: false,
+        rootIsCrabd: false,
+        comments: [{ id: 101, author: 'dev', body: 'this leaks the handle', createdAt: '' }],
+      },
+    ],
+    reviews: [
+      { id: 7, state: 'changes_requested', body: 'A couple of things.', author: 'dev', submittedAt: '' },
+      { id: 8, state: 'commented', body: '', author: 'dev', submittedAt: '' },
+    ],
+    checks: {
+      available: true,
+      checks: [
+        { name: 'unit', conclusion: 'failure', url: 'http://ci/1', logTail: 'AssertionError: nope' },
+        { name: 'lint', conclusion: 'success' },
+      ],
+    },
+  };
+
+  const round = (over: { config?: ResolvedConfig; context?: ForgeContext } = {}) =>
+    assemblePrompt({
+      mode: 'implement',
+      config: over.config ?? config,
+      context: over.context ?? roundContext,
+      event: { ...event, kind: 'pull_request_review', action: 'submitted', pullRequest: pr } as ForgeEvent,
+      trigger: { mode: 'implement', explicit: true },
+      phase: 'round',
+    });
+
+  it('uses the round prompt, not the issue one', () => {
+    const { instructions } = round();
+    expect(instructions).toContain('open pull request that a human is reviewing');
+    expect(instructions).toContain('## Answering a conversation');
+    expect(instructions).toContain('## You may push back');
+    expect(instructions).not.toContain('implementing an issue end-to-end');
+  });
+
+  it('keeps the issue prompt on the issue phase', () => {
+    const { instructions } = assemblePrompt({
+      mode: 'implement',
+      config,
+      context,
+      event,
+      trigger: { mode: 'implement', explicit: true },
+      phase: 'issue',
+    });
+    expect(instructions).toContain('implementing an issue end-to-end');
+    expect(instructions).not.toContain('## Answering a conversation');
+  });
+
+  it('lists the configured verification commands in the prompt', () => {
+    const withVerify = makeConfig({ implement: { verify: { commands: ['pnpm typecheck'] } } });
+    expect(round({ config: withVerify }).instructions).toContain('pnpm typecheck');
+    expect(round().instructions).not.toContain('## Checks you must run');
+  });
+
+  it('renders each open conversation under the id the model must copy', () => {
+    const { message } = round();
+    expect(message).toContain('## Open review feedback (1)');
+    expect(message).toContain('### PRRT_abc (`src/a.ts:12`)');
+    expect(message).toContain('this leaks the handle');
+    expect(message).toContain('const x = 1;');
+  });
+
+  it('renders submitted reviews, skipping the ones that are only inline comments', () => {
+    const { message } = round();
+    expect(message).toContain('## Submitted reviews');
+    expect(message).toContain('A couple of things.');
+    expect(message).toContain('changes requested');
+  });
+
+  it('renders failing checks with their log tail and counts the passing ones', () => {
+    const { message } = round();
+    expect(message).toContain('## Continuous integration for `deadbeef`');
+    expect(message).toContain('### unit (failure)');
+    expect(message).toContain('AssertionError: nope');
+    expect(message).toContain('1 passing');
+    expect(message).not.toContain('### lint');
+  });
+
+  it('says so plainly when every check passes', () => {
+    const green: ForgeContext = {
+      ...roundContext,
+      checks: { available: true, checks: [{ name: 'unit', conclusion: 'success' }] },
+    };
+    expect(round({ context: green }).message).toContain('All 1 check(s) on `deadbeef` are passing');
+  });
+
+  it('omits the CI section when the check state could not be read', () => {
+    const blind: ForgeContext = { ...roundContext, checks: { available: false, reason: 'no access', checks: [] } };
+    expect(round({ context: blind }).message).not.toContain('## Continuous integration');
+  });
+
+  it('drops the round sections outside a round', () => {
+    const { message } = assemblePrompt({
+      mode: 'mention',
+      config,
+      context: roundContext,
+      event,
+      trigger: { mode: 'mention', explicit: true },
+    });
+    expect(message).not.toContain('## Open review feedback');
+    expect(message).not.toContain('## Continuous integration');
+  });
+});

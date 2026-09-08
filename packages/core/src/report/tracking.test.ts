@@ -9,6 +9,11 @@ import {
   renderRateLimitExhausted,
   renderResult,
   renderWorking,
+  isCommentHandled,
+  isCrabdAuthored,
+  isRoundHandled,
+  PR_MARKER,
+  REPLY_MARKER,
   TRACKING_MARKER,
   type Branding,
 } from './tracking.ts';
@@ -193,5 +198,40 @@ describe('renderMemoryNote', () => {
     expect(body).toContain('🧠 Recorded 1 memory');
     expect(body.endsWith(MEMORY_MARKER)).toBe(true);
     expect(body).not.toContain(TRACKING_MARKER);
+  });
+});
+
+describe('round claims', () => {
+  it('writes the claim into the comment and reads it back', () => {
+    const body = renderWorking({ ...DEFAULT_BRANDING, roundClaim: { headSha: 'abc', feedbackToken: '7.12.2' } }, 'implement:round');
+    expect(isRoundHandled(body, 'abc', '7.12.2')).toBe(true);
+  });
+
+  it('is scoped to the head commit and the newest feedback', () => {
+    const body = renderWorking({ ...DEFAULT_BRANDING, roundClaim: { headSha: 'abc', feedbackToken: '7.12.2' } }, 'implement:round');
+    expect(isRoundHandled(body, 'def', '7.12.2')).toBe(false);
+    expect(isRoundHandled(body, 'abc', '7.13.2')).toBe(false);
+  });
+
+  it('says nothing when the run is not a round', () => {
+    expect(renderWorking(DEFAULT_BRANDING, 'implement')).not.toContain('crabd:round');
+  });
+
+  it('keeps review ids and comment ids in separate handled namespaces', () => {
+    const body = renderWorking({ ...DEFAULT_BRANDING, handledCommentId: 7, handledKind: 'review' }, 'implement:round');
+    expect(isCommentHandled(body, 7, 'review')).toBe(true);
+    expect(isCommentHandled(body, 7)).toBe(false);
+  });
+
+  it('recognizes its own writing by any of its markers', () => {
+    expect(isCrabdAuthored(`done\n\n${REPLY_MARKER}`)).toBe(true);
+    expect(isCrabdAuthored(`opened by a human\n\n${PR_MARKER}`)).toBe(true);
+    expect(isCrabdAuthored('a human wrote this')).toBe(false);
+    expect(isCrabdAuthored(undefined)).toBe(false);
+  });
+
+  it('names the round verb so a round does not say it is implementing an issue', () => {
+    expect(renderWorking(DEFAULT_BRANDING, 'implement:round')).toContain('addressing the feedback');
+    expect(renderWorking(DEFAULT_BRANDING, 'implement')).toContain('implementing this issue');
   });
 });

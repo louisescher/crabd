@@ -3,7 +3,7 @@ import type { ForgeAdapter, ForgeContext, ForgeEvent } from '../forge/types.ts';
 import { debug } from '../logger.ts';
 import { commitMemories } from '../memory/commit.ts';
 import { getMode, type FinalizeResult } from '../modes/registry.ts';
-import { MEMORY_MARKER, renderFailure, renderMemoryNote, renderResult, type FailureRender } from '../report/tracking.ts';
+import { MEMORY_MARKER, REPLY_MARKER, renderFailure, renderMemoryNote, renderResult, type FailureRender } from '../report/tracking.ts';
 import type { TriggerResult } from '../trigger/detect.ts';
 import type { RunPlan } from './prepare.ts';
 
@@ -67,21 +67,31 @@ export async function finalizeRun(input: FinalizeInput): Promise<FinalizeResult>
     if (memory.note) debug(() => `memory outcome: ${memory.note}`);
 
     const pullNumber = context.pullRequest?.number ?? event.pullRequest?.number;
+    // A mode that already answered the review threads itself must not also post its whole summary
+    // as one more inline reply on the triggering thread.
     const isReviewReply =
-      event.kind === 'pull_request_review_comment' && Boolean(context.replyThread) && Boolean(event.comment) && pullNumber !== undefined;
+      event.kind === 'pull_request_review_comment' &&
+      !result.handledThreadReplies &&
+      Boolean(context.replyThread) &&
+      Boolean(event.comment) &&
+      pullNumber !== undefined;
 
     if (isReviewReply && event.comment && pullNumber !== undefined) {
-      await adapter.replyToReviewComment(pullNumber, event.comment.id, result.trackingComment ?? result.summary);
+      await adapter.replyToReviewComment(
+        pullNumber,
+        event.comment.id,
+        `${result.trackingComment ?? result.summary}\n\n${REPLY_MARKER}`,
+      );
       await adapter.updateTrackingComment(
         plan.tracking,
-        renderResult(plan.branding, { mode: plan.mode, summary: '↩️ Replied inline.', ...(note ? { note } : {}) }),
+        renderResult(plan.branding, { mode: plan.verbKey, summary: '↩️ Replied inline.', ...(note ? { note } : {}) }),
       );
     } else {
       await adapter.updateTrackingComment(
         plan.tracking,
         // Use the mode's short tracking text when it posted its detail elsewhere (e.g. a PR review).
         renderResult(plan.branding, {
-          mode: plan.mode,
+          mode: plan.verbKey,
           summary: result.trackingComment ?? result.summary,
           prUrl: result.prUrl,
           ...(note ? { note } : {}),

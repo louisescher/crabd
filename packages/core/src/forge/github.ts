@@ -1,19 +1,32 @@
 import { Octokit } from '@octokit/rest';
 import type { AuthProvider } from '../auth/types.ts';
-import { TRACKING_MARKER } from '../report/tracking.ts';
+import { FINDING_MARKER, TRACKING_MARKER } from '../report/tracking.ts';
+import {
+  DEFAULT_LOG_TAIL,
+  describeCheckFailure,
+  MAX_FAILED_LOGS,
+  normalizeCheckConclusion,
+  normalizeReviewState,
+  tail,
+} from './checks.ts';
+import { assertExpectedParent, BranchMovedError } from './commit-guard.ts';
 import { foldCommentsIntoBody } from './review-body.ts';
 import { buildReviewThread } from './review-thread.ts';
 import { buildDiffFromFiles, type PullFilePatch } from './synth-diff.ts';
 import type {
+  CheckSummary,
+  ChecksSummary,
   CommitRequest,
   ForgeActor,
   ForgeContext,
   ForgeEvent,
   ForgeKind,
   ForgeRepo,
+  ForgeReview,
   OpenPrRequest,
   PullRequestRef,
   ReviewSubmission,
+  ReviewThreadSummary,
   TrackingComment,
   ForgeAdapter,
 } from './types.ts';
@@ -37,6 +50,99 @@ function isDiffTooLarge(err: unknown): boolean {
 }
 
 const MAX_CHANGED_FILES = 1_000;
+
+const THREAD_PAGES = 5;
+const MAX_REVIEWS = 100;
+
+const THREADS_QUERY = `
+query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 50, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          isResolved
+          isOutdated
+          path
+          line
+          originalLine
+          comments(first: 50) {
+            nodes { databaseId body createdAt diffHunk author { login } }
+          }
+        }
+      }
+    }
+  }
+}`;
+
+const RESOLVE_THREAD_MUTATION = `
+mutation($threadId: ID!) {
+  resolveReviewThread(input: { threadId: $threadId }) { thread { isResolved } }
+}`;
+
+interface GraphQlThreadNode {
+  id?: string;
+  isResolved?: boolean;
+  isOutdated?: boolean;
+  path?: string;
+  line?: number | null;
+  originalLine?: number | null;
+  comments?: {
+    nodes?: ({
+      databaseId?: number | null;
+      body?: string | null;
+      createdAt?: string | null;
+      diffHunk?: string | null;
+      author?: { login?: string } | null;
+    } | null)[];
+  };
+}
+
+interface GraphQlThreads {
+  repository?: {
+    pullRequest?: {
+      reviewThreads?: {
+        pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+        nodes?: (GraphQlThreadNode | null)[];
+      };
+    };
+  };
+}
+
+function toReviewThreadSummary(node: GraphQlThreadNode | null): ReviewThreadSummary | undefined {
+  if (!node?.id) return undefined;
+  const raw = (node.comments?.nodes ?? []).filter((c): c is NonNullable<typeof c> => Boolean(c));
+  const root = raw[0];
+  if (!root?.databaseId) return undefined;
+  const line = node.line ?? node.originalLine ?? undefined;
+  return {
+    id: node.id,
+    rootCommentId: root.databaseId,
+    path: node.path ?? '',
+    ...(line !== undefined && line !== null ? { line } : {}),
+    ...(root.diffHunk ? { diffHunk: root.diffHunk } : {}),
+    isResolved: node.isResolved ?? false,
+    ...(node.isOutdated !== undefined ? { isOutdated: node.isOutdated } : {}),
+    rootIsCrabd: (root.body ?? '').includes(FINDING_MARKER),
+    comments: raw.map((comment) => ({
+      id: comment.databaseId ?? 0,
+      author: comment.author?.login ?? 'unknown',
+      body: comment.body ?? '',
+      createdAt: comment.createdAt ?? '',
+    })),
+  };
+}
+
+/** The logs endpoint returns text, but returns it as a buffer on some transports. */
+function decodeLog(data: unknown): string {
+  if (typeof data === 'string') return data;
+  if (data instanceof ArrayBuffer) return Buffer.from(data).toString('utf-8');
+  if (data && typeof data === 'object' && 'byteLength' in data) {
+    return Buffer.from(data as ArrayBufferLike).toString('utf-8');
+  }
+  return '';
+}
 
 type PullFile = PullFilePatch & { additions: number; deletions: number };
 
@@ -121,7 +227,10 @@ export class GitHubForge implements ForgeAdapter {
           headRef: pr.head.ref,
           baseRef: pr.base.ref,
           headSha: pr.head.sha,
-          fromFork: pr.head.repo?.fork ?? false,
+          ...(pr.head.repo?.full_name ? { headRepoSlug: pr.head.repo.full_name } : {}),
+          fromFork: pr.head.repo?.full_name
+            ? pr.head.repo.full_name !== this.repo.slug
+            : (pr.head.repo?.fork ?? false),
           isDraft: pr.draft ?? false,
         };
       }
@@ -262,6 +371,119 @@ export class GitHubForge implements ForgeAdapter {
     }
   }
 
+  async listReviewThreads(prNumber: number): Promise<ReviewThreadSummary[]> {
+    const gh = await this.gh();
+    const threads: ReviewThreadSummary[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < THREAD_PAGES; page += 1) {
+      const result: GraphQlThreads = await gh.graphql(THREADS_QUERY, {
+        owner: this.owner,
+        repo: this.name,
+        number: prNumber,
+        cursor,
+      });
+      const connection = result.repository?.pullRequest?.reviewThreads;
+      if (!connection) break;
+      for (const node of connection.nodes ?? []) {
+        const thread = toReviewThreadSummary(node);
+        if (thread) threads.push(thread);
+      }
+      if (!connection.pageInfo?.hasNextPage) break;
+      cursor = connection.pageInfo.endCursor ?? null;
+      if (!cursor) break;
+    }
+    return threads;
+  }
+
+  async listReviews(prNumber: number): Promise<ForgeReview[]> {
+    const gh = await this.gh();
+    const collected: Awaited<ReturnType<typeof gh.pulls.listReviews>>['data'] = [];
+    for await (const page of gh.paginate.iterator(gh.pulls.listReviews, {
+      owner: this.owner,
+      repo: this.name,
+      pull_number: prNumber,
+      per_page: 100,
+    })) {
+      collected.push(...page.data);
+      if (collected.length >= MAX_REVIEWS) break;
+    }
+    // Newest last, so a caller taking a tail gets the reviews that still matter.
+    return collected.slice(-MAX_REVIEWS).map((review) => ({
+      id: review.id,
+      state: normalizeReviewState(review.state),
+      body: review.body ?? '',
+      author: review.user?.login ?? 'unknown',
+      submittedAt: review.submitted_at ?? '',
+    }));
+  }
+
+  async resolveReviewThread(threadId: string): Promise<boolean> {
+    const gh = await this.gh();
+    await gh.graphql(RESOLVE_THREAD_MUTATION, { threadId });
+    return true;
+  }
+
+  async listChecks(sha: string, options?: { logTailBytes?: number }): Promise<ChecksSummary> {
+    const gh = await this.gh();
+    const base = { owner: this.owner, repo: this.name };
+    const checks: CheckSummary[] = [];
+    try {
+      const { data } = await gh.checks.listForRef({ ...base, ref: sha, per_page: 100 });
+      for (const run of data.check_runs) {
+        checks.push({
+          name: run.name,
+          conclusion: normalizeCheckConclusion(run.status, run.conclusion),
+          ...(run.html_url ? { url: run.html_url } : {}),
+        });
+      }
+    } catch (error) {
+      return { available: false, reason: describeCheckFailure(error), checks: [] };
+    }
+    try {
+      const { data } = await gh.repos.getCombinedStatusForRef({ ...base, ref: sha, per_page: 100 });
+      for (const status of data.statuses) {
+        if (checks.some((check) => check.name === status.context)) continue;
+        checks.push({
+          name: status.context,
+          conclusion: normalizeCheckConclusion('completed', status.state),
+          ...(status.target_url ? { url: status.target_url } : {}),
+        });
+      }
+    } catch {
+      // Legacy commit statuses are a bonus; the check runs above are the primary source.
+    }
+
+    const failed = checks.filter((check) => check.conclusion === 'failure').slice(0, MAX_FAILED_LOGS);
+    if (failed.length > 0) await this.attachFailureLogs(sha, failed, options?.logTailBytes ?? DEFAULT_LOG_TAIL);
+    return { available: true, checks };
+  }
+
+  private async attachFailureLogs(sha: string, failed: CheckSummary[], tailBytes: number): Promise<void> {
+    const gh = await this.gh();
+    const base = { owner: this.owner, repo: this.name };
+    try {
+      const { data: runs } = await gh.actions.listWorkflowRunsForRepo({ ...base, head_sha: sha, per_page: 20 });
+      const jobs: { id: number; name: string; conclusion: string | null }[] = [];
+      for (const run of runs.workflow_runs) {
+        const { data } = await gh.actions.listJobsForWorkflowRun({ ...base, run_id: run.id, per_page: 100 });
+        for (const job of data.jobs) jobs.push({ id: job.id, name: job.name, conclusion: job.conclusion });
+      }
+      for (const check of failed) {
+        const job = jobs.find((candidate) => candidate.name === check.name && candidate.conclusion === 'failure');
+        if (!job) continue;
+        try {
+          const { data } = await gh.actions.downloadJobLogsForWorkflowRun({ ...base, job_id: job.id });
+          const text = decodeLog(data);
+          if (text) check.logTail = tail(text, tailBytes);
+        } catch {
+          // A job whose logs have expired or are not readable stays in the list without them.
+        }
+      }
+    } catch {
+      // No Actions access, or no runs for this commit. The conclusions alone are still useful.
+    }
+  }
+
   /** Create a single commit containing all files via the git data API. */
   async commitToBranch(request: CommitRequest): Promise<void> {
     const gh = await this.gh();
@@ -273,7 +495,9 @@ export class GitHubForge implements ForgeAdapter {
     try {
       const { data: ref } = await gh.git.getRef({ ...base, ref: `heads/${request.branch}` });
       parentSha = ref.object.sha;
-    } catch {
+      assertExpectedParent(request, parentSha);
+    } catch (error) {
+      if (error instanceof BranchMovedError) throw error;
       const { data: baseRef } = await gh.git.getRef({ ...base, ref: `heads/${baseBranch}` });
       parentSha = baseRef.object.sha;
       await gh.git.createRef({ ...base, ref: `refs/heads/${request.branch}`, sha: parentSha });
