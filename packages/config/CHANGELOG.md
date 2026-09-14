@@ -1,5 +1,33 @@
 # @crabd/config
 
+## 1.4.0
+
+### Minor Changes
+
+- db1d86b: Adds `update_branch`, the supported way to bring a pull request's branch up to date with its base. It merges on the forge under crab'd's identity, and stops on a conflict for a human to sort out. Available on `mention` and `implement` runs on a pull request crab'd can write to.
+
+  Changes the agent's sandbox so `git` cannot write to the repository, and removes the credentials `actions/checkout` leaves in `.git/config` before the turn starts. Every commit goes through the forge API, where the secret scan and the branch-moved guard run.
+
+  Adds a scope rule to `mention`. The comment that triggered the run is the instruction. The pull request body, other comments, and review threads are context.
+
+  Fixes a run that crashes or is cancelled leaving its tracking comment on "is working" forever. A post step now posts the failure.
+
+  Fixes `limits.timeout_minutes`, which was parsed and never enforced. It defaults to `20` and bounds the whole run, retries and fallback-model switches included. Set it to `0` for no ceiling.
+
+  Improves what a run tells you. The rate-limited comment names the model, the attempt and the wait, every comment links the run logs, and tool and turn events log without `CRABD_VERBOSE`.
+
+  #### Two things to update
+
+  Copy `timeout-minutes: 30` from the workflow template into your own workflow, as a backstop above `limits.timeout_minutes`.
+
+  If a later step in the same job pushed using the checkout's credentials, give it its own: re-run `actions/checkout`, or pass a token explicitly.
+
+- db1d86b: Fixes a `.crabd.yml` on a pull request head being able to set the permissions of the run reviewing it. `permissions.*`, `governance.*` and `prompt.override` are read from the repository's default branch. Everything else, `implement.verify.commands` included, still comes from the checkout. A permissions change on the default branch now applies to pull requests that are already open.
+
+  Fixes Vertex rate limits reported as `RESOURCE_EXHAUSTED` being treated as fatal, which meant `rate_limit.fallback_models` never engaged.
+
+  Improves what a failed secret scan tells you. A scan that times out is retried once, then reported as a timeout with the file count and the limit. A missing gitleaks binary is reported as a packaging problem. The default timeout is 120 seconds, and the commit is refused in both cases.
+
 ## 1.3.0
 
 ### Minor Changes
