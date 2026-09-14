@@ -128,9 +128,12 @@ export {
   collectChangesSinceBaseline,
   hasChanges,
   snapshotBaseline,
+  TooManyChangesError,
   type Baseline,
   type BaselineEntry,
+  type CollectOptions,
 } from './git/changes.ts';
+export { mapWithConcurrency } from './util/pool.ts';
 export { checkoutPrHead, resolveWorkspace, type GitEnv, type WorkspaceState } from './git/workspace.ts';
 export { stripCheckoutCredentials } from './git/credentials.ts';
 

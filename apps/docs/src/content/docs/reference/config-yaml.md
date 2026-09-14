@@ -427,8 +427,10 @@ name must match `token_env`:
 
 | Field             | Type     | Default | Description                                                                                                                                                    |
 | ----------------- | -------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `max_turns`       | `number` | `40`    | **Hard ceiling** on tool-calling turns — the run is aborted if it's exceeded. Not injected into the prompt, so it doesn't bias the model into finishing early. |
+| `max_turns`       | `number` | `40`    | **Hard ceiling** on tool-calling turns. The run is aborted if it's exceeded. The model is told the approximate figure so it can ration, and `submit` is exempt so a finished answer is never the call that trips it. |
 | `timeout_minutes` | `number` | `20`    | **Hard** wall-clock ceiling on the whole run, shared by every retry and fallback-model switch `rate_limit` makes rather than given a fresh one each. Set to `0` to run with no ceiling. |
+| `command_seconds` | `number` | `300`   | Ceiling on how long one shell command may run. A command that passes it is killed and the model gets exit code `124` with a message naming the limit. Set to `0` for no ceiling. |
+| `max_commit_files` | `number` | `200`   | Ceiling on how many files one commit may carry. Over it the commit is refused and nothing is read from disk, which catches a repo-wide formatter or a dependency install rewriting the working tree. Set to `0` for no ceiling. |
 
 ## `rate_limit`
 

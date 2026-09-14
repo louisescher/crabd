@@ -76,9 +76,35 @@ export function snapshotBaseline(cwd: string): Baseline {
   return baseline;
 }
 
-export function collectChangesSinceBaseline(cwd: string, baseline: Baseline): FileChange[] {
+/**
+ * Raised when the working tree carries more changed files than a commit is allowed to hold.
+ *
+ * Thrown before any file is read, so the pathological case costs a `git status` and nothing else.
+ */
+export class TooManyChangesError extends Error {
+  constructor(
+    readonly fileCount: number,
+    readonly maxFiles: number,
+    readonly sample: string[],
+  ) {
+    super(`crabd: ${fileCount} files changed, over the ${maxFiles} allowed in one commit`);
+    this.name = 'TooManyChangesError';
+  }
+}
+
+export interface CollectOptions {
+  /** Ceiling on changed files. Over it, {@link TooManyChangesError} is thrown and nothing is read. */
+  maxFiles?: number;
+}
+
+interface PendingChange {
+  path: string;
+  op: 'upsert' | 'delete';
+}
+
+export function collectChangesSinceBaseline(cwd: string, baseline: Baseline, options?: CollectOptions): FileChange[] {
   const out = git(['status', '--porcelain=v1', '-z', '--untracked-files=all'], cwd);
-  const changes: FileChange[] = [];
+  const pending: PendingChange[] = [];
 
   const touchedSinceBaseline = (path: string): boolean => {
     const before = baseline.get(path);
@@ -91,8 +117,8 @@ export function collectChangesSinceBaseline(cwd: string, baseline: Baseline): Fi
     const y = status[1];
 
     if (renameFrom !== undefined) {
-      if (x === 'R' && touchedSinceBaseline(renameFrom)) changes.push({ path: renameFrom, op: 'delete' });
-      if (touchedSinceBaseline(path)) changes.push({ path, op: 'upsert', contentBase64: readAsBase64(cwd, path) });
+      if (x === 'R' && touchedSinceBaseline(renameFrom)) pending.push({ path: renameFrom, op: 'delete' });
+      if (touchedSinceBaseline(path)) pending.push({ path, op: 'upsert' });
       continue;
     }
 
@@ -100,12 +126,30 @@ export function collectChangesSinceBaseline(cwd: string, baseline: Baseline): Fi
 
     // Pure deletion (in index or work tree), not also added/modified.
     if ((x === 'D' || y === 'D') && x !== 'A' && x !== 'M' && y !== 'M') {
-      changes.push({ path, op: 'delete' });
+      pending.push({ path, op: 'delete' });
       continue;
     }
 
-    changes.push({ path, op: 'upsert', contentBase64: readAsBase64(cwd, path) });
+    pending.push({ path, op: 'upsert' });
   }
+
+  // The ceiling is checked on the path list, before a single file is read. A working tree that a
+  // repo-wide formatter or a package manager has rewritten runs to five figures, and reading that
+  // many files into base64 strings is what exhausts the heap.
+  const maxFiles = options?.maxFiles;
+  if (maxFiles !== undefined && maxFiles > 0 && pending.length > maxFiles) {
+    throw new TooManyChangesError(
+      pending.length,
+      maxFiles,
+      pending.slice(0, 10).map((c) => c.path),
+    );
+  }
+
+  const changes: FileChange[] = pending.map((change) =>
+    change.op === 'delete'
+      ? { path: change.path, op: 'delete' }
+      : { path: change.path, op: 'upsert', contentBase64: readAsBase64(cwd, change.path) },
+  );
 
   debug(() => `collectChangesSinceBaseline: ${changes.length} change(s) in ${cwd}`);
   return changes;

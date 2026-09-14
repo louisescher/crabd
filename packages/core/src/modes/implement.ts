@@ -160,6 +160,7 @@ async function finalizeIssue(ctx: FinalizeContext<ImplementOutput>): Promise<{
     writesAllowed: ctx.config.permissions.write,
     baseline: ctx.baseline,
     secretScan: ctx.config.permissions.secretScan,
+    ...(ctx.config.limits.maxCommitFiles ? { maxFiles: ctx.config.limits.maxCommitFiles } : {}),
   });
 
   if (!committed) {
@@ -239,6 +240,7 @@ async function finalizeRound(ctx: FinalizeContext<ImplementOutput>): Promise<{
       writesAllowed: ctx.config.permissions.write,
       baseline: ctx.baseline,
       secretScan: ctx.config.permissions.secretScan,
+      ...(ctx.config.limits.maxCommitFiles ? { maxFiles: ctx.config.limits.maxCommitFiles } : {}),
     });
   } catch (error) {
     if (!(error instanceof BranchMovedError)) throw error;

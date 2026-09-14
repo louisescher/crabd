@@ -5,6 +5,7 @@ import { resolveConfig, type CrabdConfigPartial, type ResolvedConfig } from '@cr
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ForgeChangedFile, ForgeContext, ForgeEvent, ForgeRepo } from '../forge/types.ts';
 import type { WorkspaceState } from '../git/workspace.ts';
+import { registerBuiltinModes } from '../modes/builtins.ts';
 import { assemblePrompt, compressDiff } from './assemble.ts';
 import type { ProjectContext } from './project.ts';
 
@@ -488,10 +489,16 @@ describe('assemblePrompt: mention scope and the commit contract', () => {
     expect(instructions).toContain('`git` in your shell cannot change this repository.');
   });
 
-  it('gives a review run the commit contract but not the mention scope block', () => {
+  it('leaves the commit contract off a review run, which commits nothing', () => {
+    registerBuiltinModes();
     const instructions = reviewInstructions(2);
-    expect(instructions).toContain('`git` in your shell cannot change this repository.');
+    expect(instructions).not.toContain('`git` in your shell cannot change this repository.');
     expect(instructions).not.toContain('The comment that triggered this run is your instruction.');
+  });
+
+  it('keeps the commit contract on a registered mention run', () => {
+    registerBuiltinModes();
+    expect(assemble()).toContain('`git` in your shell cannot change this repository.');
   });
 
   it('gives a read-only run the read-only note instead of the commit contract', () => {
@@ -1027,5 +1034,43 @@ describe('assemblePrompt: implement rounds', () => {
     });
     expect(message).not.toContain('## Open review feedback');
     expect(message).not.toContain('## Continuous integration');
+  });
+});
+
+describe('assemblePrompt: the budget block', () => {
+  it('names the tool ceiling, the wall clock, and the per-command limit', () => {
+    const instructions = assemble();
+    expect(instructions).toContain('## Your budget');
+    expect(instructions).toContain('About 40 tool calls');
+    expect(instructions).toContain('20 minutes of wall clock');
+    expect(instructions).toContain('300 seconds for any one shell command');
+  });
+
+  it('tells the agent to wind down and that submit is always available', () => {
+    const instructions = assemble();
+    expect(instructions).toContain('stop investigating and submit what you have');
+    expect(instructions).toContain('Calling `submit` is always allowed');
+  });
+
+  it('leaves out a limit the config does not set', () => {
+    const noCommandCap = makeConfig({ limits: { command_seconds: 0, timeout_minutes: 0 } });
+    const instructions = assemblePrompt({
+      mode: 'mention',
+      config: noCommandCap,
+      context,
+      event,
+      trigger: { mode: 'mention', explicit: true },
+    }).instructions;
+    expect(instructions).toContain('About 40 tool calls');
+    expect(instructions).not.toContain('for any one shell command');
+    expect(instructions).not.toContain('minutes of wall clock');
+  });
+
+  it('warns a writable run off repo-wide commands', () => {
+    registerBuiltinModes();
+    const instructions = assemble();
+    expect(instructions).toContain('Do not run a repo-wide formatter');
+    expect(instructions).toContain('limits.max_commit_files');
+    expect(instructions).toContain('git status --short');
   });
 });

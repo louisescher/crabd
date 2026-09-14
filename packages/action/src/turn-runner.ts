@@ -53,6 +53,21 @@ const SUBMIT_NUDGE = [
  */
 const MAX_HARNESS_RETRIES = 1;
 
+/**
+ * Tools whose call is the point of the run. They are exempt from the turn budget: a run reaching
+ * one of these has finished, and cutting it off there loses the answer and the work behind it.
+ */
+const TERMINAL_TOOLS = new Set(['submit']);
+
+/**
+ * How much of the wall-clock budget is held back for a graceful wrap-up, matching the reserve the
+ * turn ceiling already keeps. Without it a run that runs out of time is killed with no answer at
+ * all, while a run that runs out of tool calls gets asked for its best one.
+ */
+const DEADLINE_WRAP_UP_MS = 90_000;
+/** Fraction of the wall-clock budget that may go to the wrap-up, for short deadlines. */
+const DEADLINE_WRAP_UP_RATIO = 0.15;
+
 /** How often the heap watchdog samples usage. */
 const HEAP_CHECK_INTERVAL_MS = 5_000;
 /** Heap usage ratio at which the watchdog logs a one-time warning. */
@@ -312,6 +327,20 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
   let abortedForMaxTurns = false;
   let wrapUpRequested = false;
 
+  // The wall clock gets the same courtesy as the tool ceiling: stop exploring a little early and
+  // spend what is left asking for the best current answer.
+  const wrapUpReserveMs = ctx.timeoutMs
+    ? Math.min(DEADLINE_WRAP_UP_MS, Math.floor(ctx.timeoutMs * DEADLINE_WRAP_UP_RATIO))
+    : 0;
+  const softDeadline =
+    ctx.timeoutMs && wrapUpReserveMs > 0 ? setTimeout(() => {
+      if (wrapUpRequested || abortedForTimeout) return;
+      wrapUpRequested = true;
+      log(`[${ctx.runId}] approaching the run deadline, asking for a final answer now`);
+      void currentAbort?.();
+    }, ctx.timeoutMs - wrapUpReserveMs) : undefined;
+  softDeadline?.unref();
+
   // A tool-call ceiling says nothing about how much heap a single turn's own context/output grows
   // by. A runaway turn can hit no tool at all and still climb straight to a V8 OOM crash, which is
   // a hard process abort (not a catchable rejection): no comment update, no cleanup, no log line
@@ -363,6 +392,10 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
         log(`[${ctx.runId}] tool_start ${line}`);
         debug(() => `[${ctx.runId}] tool_start ${e.toolName} args=${truncate(e.args)}`);
         if (!hasMaxTurns || !currentAbort) return;
+        // The tool that ends the turn is never the one the budget cuts off. Aborting a `submit`
+        // throws away a finished answer one call from landing, and it is the call every budget
+        // path is trying to reach.
+        if (TERMINAL_TOOLS.has(e.toolName)) return;
         // Once the wrap-up is in flight the budget stops applying: the reserve exists so the final
         // answer can be produced, and submitting it is itself a tool call. `WRAP_UP_TIMEOUT_MS` bounds
         // this instead — without it the wrap-up aborts itself and the partial answer is lost.
@@ -514,6 +547,8 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
         } catch {
           // Wrap-up failed: fall through to normal max_turns handling.
         }
+        // A wrap-up the clock asked for must not be reported as a turn-budget failure.
+        if (abortedForTimeout || !hasMaxTurns) throw new Error('crabd: the run timed out before it could answer');
         abortedForMaxTurns = true;
         throw new Error(`crabd: max_turns (${maxTurns}) exceeded`);
       }
@@ -639,6 +674,7 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
     };
   } finally {
     clearInterval(heapWatchdog);
+    clearTimeout(softDeadline);
     unsubscribe();
   }
 

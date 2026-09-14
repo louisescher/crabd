@@ -17,8 +17,8 @@ in your [`.crabd.yml`](/reference/config-yaml/) (or the equivalent in
 
 Every run has a **hard ceiling** on tool-calling turns (`limits.max_turns`, default `40`). When a
 run reaches it, crab'd is stopped mid-task. This is a safety valve against runaway loops and
-unbounded CI cost — it is not injected into the prompt, so the model isn't biased into stopping
-early.
+unbounded CI cost. The model is told the approximate figure up front so it can spend it sensibly,
+and `submit` never counts against it, so a finished answer is never the call that gets cut off.
 
 Before it stops, crab'd reserves a few turns to ask the model for a **best-effort final answer** —
 so the comment usually carries a partial result (what it found, what's still open) rather than
@@ -49,8 +49,15 @@ Raising `max_turns` trades CI minutes (and tokens) for headroom — prefer narro
 > **crab'd** ran out of time … — the run exceeded its time limit.
 
 Every run has a wall-clock ceiling (`limits.timeout_minutes`, default `20`). It's one deadline for
-the whole run: a rate-limit retry and a fallback-model switch spend the same budget rather than
-each getting a fresh one.
+the whole run: a rate-limit retry and a fallback-model switch spend the same budget, and neither
+gets a fresh one.
+
+Shortly before the deadline crab'd stops exploring and asks for a best-effort final answer, the
+same reserve the turn ceiling keeps, so a run that runs out of time still reports what it has.
+
+A single shell command has its own ceiling (`limits.command_seconds`, default `300`). A command
+that passes it is killed and the model gets exit code `124` with a message naming the limit, which
+keeps one slow build from eating the whole run.
 
 What to change:
 
@@ -76,6 +83,9 @@ Common causes:
 
 - **An unusually large diff or file** was pulled into the prompt (see `context.full_diff`).
 - **A long-running conversation** kept growing turn over turn without producing an answer.
+- **A working tree far bigger than the change**, where a repo-wide formatter or a dependency
+  install rewrote thousands of files and the commit path read every one of them. `limits.max_commit_files`
+  now refuses that before anything is read, so this shows up as a refused commit.
 
 What to change:
 
@@ -186,6 +196,30 @@ Four reasons, in order of likelihood:
   request on the installation (an org owner has to approve it; raising the App's permissions alone
   does nothing until the installation accepts). Older versions surfaced this only as a 403 from
   `POST /repos/…/git/blobs` at the very end of a run.
+
+## The commit was too wide
+
+> `refusing to commit <n> changed files, over the limit of 200`
+
+A commit is capped at [`limits.max_commit_files`](/reference/config-yaml/#limits) files. The count
+is taken from `git status` before any file is read, so an accidentally enormous working tree costs
+nothing to reject.
+
+A change this wide almost always comes from a command that rewrites the whole repository: a
+repo-wide formatter, a linter run with `--fix`, `pnpm install`, or `pnpm dedupe`. crab'd commits
+everything left modified in the checkout, so one of those buries the change you asked for under
+thousands of unrelated files. The prompt tells the agent to avoid them and to format by path.
+
+What to change:
+
+1. **Check what ran.** The message lists the first few paths. If they're unrelated to the request,
+   a repo-wide command is the cause.
+2. **Raise the ceiling** if a change this size is genuinely intended:
+
+   ```yaml
+   limits:
+     max_commit_files: 1000 # default 200, or 0 for no ceiling
+   ```
 
 ## The secret scanner could not run
 

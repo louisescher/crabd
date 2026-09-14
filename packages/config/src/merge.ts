@@ -121,7 +121,7 @@ export interface ResolvedConfig {
     /** Full system-prompt override, set only when the org permits it for this repo. */
     override?: string;
   };
-  limits: { maxTurns: number; timeoutMinutes?: number };
+  limits: { maxTurns: number; timeoutMinutes?: number; commandSeconds?: number; maxCommitFiles?: number };
   rateLimit: ResolvedRateLimit;
   modes: Record<string, ResolvedMode>;
   mcp: ResolvedMcpServer[];
@@ -441,6 +441,8 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
     'limits.max_turns',
   );
   const timeoutMinutes = pickScalar('limits.timeout_minutes', (c) => c.limits?.timeout_minutes, layers, locked);
+  const commandSeconds = pickScalar('limits.command_seconds', (c) => c.limits?.command_seconds, layers, locked);
+  const maxCommitFiles = pickScalar('limits.max_commit_files', (c) => c.limits?.max_commit_files, layers, locked);
   const rateLimit = resolveRateLimit(layers, locked);
   const mcp = reconcileByKey('mcp', (c) => c.mcp, (s) => s.name, layers, locked) as ResolvedMcpServer[];
 
@@ -474,7 +476,12 @@ export function resolveConfig(options: ResolveOptions): ResolvedConfig {
       instructions: promptInstructions,
       override: resolveOverride(options.repoSlug, orgLayer, repoLayer),
     },
-    limits: { maxTurns, ...(timeoutMinutes !== undefined ? { timeoutMinutes } : {}) },
+    limits: {
+      maxTurns,
+      ...(timeoutMinutes !== undefined ? { timeoutMinutes } : {}),
+      ...(commandSeconds !== undefined ? { commandSeconds } : {}),
+      ...(maxCommitFiles !== undefined ? { maxCommitFiles } : {}),
+    },
     rateLimit,
     modes,
     mcp,

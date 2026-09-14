@@ -9,6 +9,7 @@ import {
   type DurabilityConfig,
 } from '@flue/runtime';
 import { local } from '@flue/runtime/node';
+import { withCommandTimeout } from '../sandbox-limits.ts';
 import * as v from 'valibot';
 import { getMode } from '@crabd/core';
 import {
@@ -48,7 +49,7 @@ export function CrabdTurn() {
   useModel(creation?.model ?? DEFAULT_MODEL, {
     ...(ctx.thinkingLevel ? { thinkingLevel: ctx.thinkingLevel } : {}),
   });
-  useSandbox(local({ cwd: ctx.cwd, env: ctx.sandboxEnv }));
+  useSandbox(withCommandTimeout(local({ cwd: ctx.cwd, env: ctx.sandboxEnv }), ctx.commandTimeoutMs ?? 0));
 
   for (const connection of mcpConnections()) useMcpConnection(connection);
 

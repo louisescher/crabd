@@ -406,6 +406,10 @@ export const LimitsPartialSchema = v.object({
   max_turns: v.optional(v.number()),
   /** Hard wall-clock ceiling on a run, in minutes, shared across the whole fallback chain. 0 means no ceiling. */
   timeout_minutes: v.optional(v.number()),
+  /** Ceiling on how long one shell command may run, in seconds. 0 means no ceiling. */
+  command_seconds: v.optional(v.number()),
+  /** Ceiling on how many files one commit may carry. 0 means no ceiling. */
+  max_commit_files: v.optional(v.number()),
 });
 export type LimitsPartial = v.InferOutput<typeof LimitsPartialSchema>;
 
@@ -583,6 +587,8 @@ export const DEFAULT_CONFIG: CrabdConfigPartial = {
   limits: {
     max_turns: 40,
     timeout_minutes: 20,
+    command_seconds: 300,
+    max_commit_files: 200,
   },
   rate_limit: {
     // Opt-in fallback: no chain by default. Backoff governs waits between model

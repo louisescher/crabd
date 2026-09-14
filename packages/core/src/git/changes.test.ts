@@ -3,7 +3,13 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { changesForPaths, collectChangesSinceBaseline, hasChanges, snapshotBaseline } from './changes.ts';
+import {
+  changesForPaths,
+  collectChangesSinceBaseline,
+  hasChanges,
+  snapshotBaseline,
+  TooManyChangesError,
+} from './changes.ts';
 
 let dir: string;
 
@@ -107,5 +113,65 @@ describe('changesForPaths', () => {
     expect(Buffer.from(change!.contentBase64!, 'base64').toString('utf-8')).toBe(
       execFileSync('cat', [join(dir, 'keep.txt')], { encoding: 'utf-8' }),
     );
+  });
+});
+
+describe('collectChangesSinceBaseline: the file ceiling', () => {
+  let wide: string;
+
+  function wideGit(args: string[]): void {
+    execFileSync('git', args, { cwd: wide });
+  }
+
+  beforeAll(() => {
+    wide = mkdtempSync(join(tmpdir(), 'crabd-wide-'));
+    execFileSync('git', ['init', '-q'], { cwd: wide });
+    wideGit(['config', 'user.email', 't@example.com']);
+    wideGit(['config', 'user.name', 'Test']);
+    writeFileSync(join(wide, 'seed.txt'), 'seed');
+    wideGit(['add', '-A']);
+    wideGit(['commit', '-q', '-m', 'init']);
+  });
+
+  afterAll(() => rmSync(wide, { recursive: true, force: true }));
+
+  it('throws once the change count passes the ceiling', () => {
+    const baseline = snapshotBaseline(wide);
+    for (let i = 0; i < 12; i++) writeFileSync(join(wide, `f${i}.txt`), `content ${i}`);
+
+    expect(() => collectChangesSinceBaseline(wide, baseline, { maxFiles: 5 })).toThrow(TooManyChangesError);
+  });
+
+  it('reports the count, the ceiling, and a sample of paths', () => {
+    const baseline = snapshotBaseline(wide);
+    for (let i = 0; i < 12; i++) writeFileSync(join(wide, `f${i}.txt`), `changed ${i}`);
+
+    try {
+      collectChangesSinceBaseline(wide, baseline, { maxFiles: 5 });
+      expect.unreachable('expected a TooManyChangesError');
+    } catch (error) {
+      const tooMany = error as TooManyChangesError;
+      expect(tooMany.fileCount).toBe(12);
+      expect(tooMany.maxFiles).toBe(5);
+      expect(tooMany.sample).toHaveLength(10);
+      expect(tooMany.sample.every((path) => path.endsWith('.txt'))).toBe(true);
+    }
+  });
+
+  it('allows a change set exactly at the ceiling', () => {
+    const baseline = snapshotBaseline(wide);
+    for (let i = 0; i < 12; i++) writeFileSync(join(wide, `f${i}.txt`), `again ${i}`);
+
+    const changes = collectChangesSinceBaseline(wide, baseline, { maxFiles: 12 });
+    expect(changes).toHaveLength(12);
+    expect(changes[0]?.contentBase64).toBeDefined();
+  });
+
+  it('leaves the change set unbounded when no ceiling is given', () => {
+    const baseline = snapshotBaseline(wide);
+    for (let i = 0; i < 12; i++) writeFileSync(join(wide, `f${i}.txt`), `unbounded ${i}`);
+
+    expect(collectChangesSinceBaseline(wide, baseline)).toHaveLength(12);
+    expect(collectChangesSinceBaseline(wide, baseline, { maxFiles: 0 })).toHaveLength(12);
   });
 });

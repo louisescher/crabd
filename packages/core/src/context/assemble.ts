@@ -11,6 +11,7 @@ import type {
 } from '../forge/types.ts';
 import type { WorkspaceState } from '../git/workspace.ts';
 import type { ImplementPhase } from '../forge/ownership.ts';
+import { getMode } from '../modes/registry.ts';
 import { describeCommentableLines, type AnchorableFile } from './diff-lines.ts';
 import { splitSections } from './diff-parse.ts';
 import type { ProjectContext } from './project.ts';
@@ -77,7 +78,7 @@ const REVIEW_METHOD = [
   '## Method',
   'Work through these in order. Do not skip to reporting.',
   '1. **Orient.** Read the pull request description and the changed-files list. Note what the change is *trying* to do — a change that does something different from what it claims is itself a finding.',
-  '2. **Read the real code.** For every file you intend to comment on, open it with your file tools. The diff in your context is a list of leads, not evidence: it shows you a few lines of context around each hunk, not the function they live in, not the guards above them, and not the callers.',
+  '2. **Read the real code.** The diff in your context is a list of leads: it shows a few lines around each hunk, not the function they live in, not the guards above them, and not the callers. The "Changed files at HEAD" section already carries the full text of the files small enough to send, so work from that. Open a file yourself when that section marks it as windowed or omitted, or when a lead points outside the changed files.',
   '3. **Find the callers.** Grep for every changed function, type, and exported symbol. Most false positives in code review are "this case is not handled" where the case is handled one frame up — and most missed bugs are contract changes that break a caller the diff never shows you.',
   '4. **Compare against this repo.** Find the nearest existing implementation of the same kind of thing and check whether the change deviates from it. A deviation from an established pattern in this codebase is a finding. A deviation from your personal preference is not.',
   '5. **Trace.** For each candidate problem, follow the value from where it enters to where it has an effect, and be able to state that path.',
@@ -432,12 +433,35 @@ const ROUND_PUSHBACK = [
   'Style and naming preferences are not worth declining. Make those changes.',
 ].join('\n');
 
+/**
+ * What the run costs, told to the model.
+ *
+ * The budget exists whether or not the model knows about it, and a model that does not know spends
+ * it on the wrong things: one run put four full `pnpm typecheck` invocations and three test runs
+ * into a twenty-minute clock, then got cut off before it could tidy up. Naming the ceilings lets it
+ * ration, and naming the wind-down tells it what to do when it is close.
+ */
+function budgetNote(limits: ResolvedConfig['limits']): string {
+  const lines = ['## Your budget', 'This run is bounded. Plan for it.'];
+  if (limits.maxTurns) lines.push(`- About ${limits.maxTurns} tool calls, counted across the whole run.`);
+  if (limits.timeoutMinutes) lines.push(`- ${limits.timeoutMinutes} minutes of wall clock, including the time your commands spend running.`);
+  if (limits.commandSeconds) lines.push(`- ${limits.commandSeconds} seconds for any one shell command. A command over the limit is killed and you get its exit code, so split long work up.`);
+  lines.push(
+    'Spend it on the task you were given. Run a build, a test suite, or a typecheck once, after you have finished editing, and read the output you got.',
+    'Batch independent reads into one turn: several `read` or `grep` calls in a single response cost one round trip.',
+    'When you are near the end of the budget, stop investigating and submit what you have. A partial answer that says what is unfinished is worth more than being cut off mid-thought. Calling `submit` is always allowed, even when nothing else is.',
+  );
+  return lines.join('\n');
+}
+
 /** The commit contract, told to every mode that may write. */
 const COMMIT_CONTRACT = [
   '## How your changes land',
   "crab'd commits for you. Edit files in the checkout and stop there: the harness collects what changed, scans it, and commits it to the right branch under its own identity.",
   '`git` in your shell cannot change this repository. `commit`, `add`, `push`, `merge`, `rebase`, `pull`, `checkout`, `branch`, `reset` and `stash` are refused, as are the forge CLI verbs that post or merge anything. Reading (`status`, `log`, `diff`, `show`, `blame`) works, and so does cloning another repository you were granted.',
   'You cannot merge, rebase, or rewrite history. To bring this branch up to date with its base, call `update_branch` before you edit anything. If it reports a conflict, say so and stop: resolving it is the author\'s call, not yours.',
+  'Everything you leave modified in the checkout gets committed, so leave modified only what you meant to change. Do not run a repo-wide formatter, a linter with `--fix`, a dependency install, or `dedupe`: those rewrite thousands of files, and the commit is refused when it grows past `limits.max_commit_files`. Format the files you edited, by path.',
+  'Before you submit, run `git status --short` and confirm the list is the change you were asked for. If something crept in, put it back.',
 ].join('\n');
 
 /** Scope for a mention. `implement:round` has its own version in {@link ROUND_SCOPE}. */
@@ -489,9 +513,14 @@ function baseInstructions(mode: string, config: ResolvedConfig, forge: string, p
           ? [BASE_PROMPTS.implement, verificationBlock(config.implement.verify.commands)].filter(Boolean).join('\n\n')
           : (BASE_PROMPTS[mode] ?? GENERIC_BASE);
   const scoped = mode === 'mention' ? [base, MENTION_SCOPE].join('\n\n') : base;
-  const contract = config.permissions.write ? `\n\n${COMMIT_CONTRACT}` : '';
+  // The contract describes what `finalize` does with the working tree, so it belongs only to modes
+  // that commit one. Review edits nothing and never mounts `update_branch`, so telling it either
+  // would be describing a mechanism it does not have.
+  const registered = getMode(mode);
+  const commits = config.permissions.write && (registered === undefined || registered.writes !== undefined);
+  const contract = commits ? `\n\n${COMMIT_CONTRACT}` : '';
   const readOnly = config.permissions.write ? '' : `\n${READ_ONLY_NOTE}`;
-  return `${scoped}${contract}\n\n${VOICE_NOTE}\n${NO_HARNESS_TALK}\n${environmentNote(config.repos, forge)}${readOnly}`;
+  return `${scoped}${contract}\n\n${budgetNote(config.limits)}\n\n${VOICE_NOTE}\n${NO_HARNESS_TALK}\n${environmentNote(config.repos, forge)}${readOnly}`;
 }
 
 export interface AssembledPrompt {

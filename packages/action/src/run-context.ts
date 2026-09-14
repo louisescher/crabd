@@ -70,6 +70,8 @@ export interface RunContext {
   mcp: ResolvedMcpServer[];
   maxTurns?: number;
   timeoutMs?: number;
+  /** Ceiling on one shell command, in milliseconds. Absent means no ceiling. */
+  commandTimeoutMs?: number;
   /** The forge token, used to fetch images from authenticated forge hosts. */
   forgeToken?: string;
   /** `owner/repo`, for the refuter's prompt. */
@@ -138,6 +140,9 @@ export function buildRunContext(input: {
     ...(config.limits.maxTurns ? { maxTurns: config.limits.maxTurns } : {}),
     ...(config.limits.timeoutMinutes
       ? { timeoutMs: Math.round(config.limits.timeoutMinutes * 60_000) }
+      : {}),
+    ...(config.limits.commandSeconds
+      ? { commandTimeoutMs: Math.round(config.limits.commandSeconds * 1000) }
       : {}),
     ...(input.forgeToken ? { forgeToken: input.forgeToken } : {}),
     ...(input.repoSlug ? { repoSlug: input.repoSlug } : {}),

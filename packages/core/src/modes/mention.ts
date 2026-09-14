@@ -70,6 +70,7 @@ export const mentionMode: ModeDefinition<MentionOutput> = {
           writesAllowed: ctx.config.permissions.write,
           baseline: ctx.baseline,
           secretScan: ctx.config.permissions.secretScan,
+          ...(ctx.config.limits.maxCommitFiles ? { maxFiles: ctx.config.limits.maxCommitFiles } : {}),
         });
         if (committed) summary += `\n\n✅ Committed changes to \`${branch}\`.`;
       }

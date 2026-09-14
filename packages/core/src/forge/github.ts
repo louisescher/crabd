@@ -11,6 +11,7 @@ import {
 } from './checks.ts';
 import { assertExpectedParent, BranchMovedError } from './commit-guard.ts';
 import { foldCommentsIntoBody } from './review-body.ts';
+import { mapWithConcurrency } from '../util/pool.ts';
 import { buildReviewThread } from './review-thread.ts';
 import { buildDiffFromFiles, type PullFilePatch } from './synth-diff.ts';
 import type {
@@ -38,6 +39,14 @@ export interface GitHubForgeOptions {
   /** GitHub API base URL (GitHub Enterprise). Defaults to public GitHub. */
   baseUrl?: string;
 }
+
+/**
+ * Blob uploads in flight at once during a commit.
+ *
+ * Low on purpose. The ceiling that matters is sockets, not throughput: a commit is at most a few
+ * hundred files and finishes in seconds either way.
+ */
+const BLOB_UPLOAD_CONCURRENCY = 8;
 
 /** An Octokit `RequestError` carrying HTTP 422 (Unprocessable Entity). */
 function isUnprocessableEntity(err: unknown): boolean {
@@ -510,20 +519,18 @@ export class GitHubForge implements ForgeAdapter {
 
     const { data: parentCommit } = await gh.git.getCommit({ ...base, commit_sha: parentSha });
 
-    const tree = await Promise.all(
-      request.changes.map(async (change) => {
-        if (change.op === 'delete') {
-          // A null sha in a tree entry removes the path.
-          return { path: change.path, mode: '100644' as const, type: 'blob' as const, sha: null };
-        }
-        const { data: blob } = await gh.git.createBlob({
-          ...base,
-          content: change.contentBase64 ?? '',
-          encoding: 'base64',
-        });
-        return { path: change.path, mode: '100644' as const, type: 'blob' as const, sha: blob.sha };
-      }),
-    );
+    const tree = await mapWithConcurrency(request.changes, BLOB_UPLOAD_CONCURRENCY, async (change) => {
+      if (change.op === 'delete') {
+        // A null sha in a tree entry removes the path.
+        return { path: change.path, mode: '100644' as const, type: 'blob' as const, sha: null };
+      }
+      const { data: blob } = await gh.git.createBlob({
+        ...base,
+        content: change.contentBase64 ?? '',
+        encoding: 'base64',
+      });
+      return { path: change.path, mode: '100644' as const, type: 'blob' as const, sha: blob.sha };
+    });
 
     const { data: newTree } = await gh.git.createTree({ ...base, base_tree: parentCommit.tree.sha, tree });
     const { data: commit } = await gh.git.createCommit({
