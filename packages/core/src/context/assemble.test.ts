@@ -77,7 +77,7 @@ describe('assemblePrompt — operating-environment note', () => {
   it('tells the agent it works in a single, scoped checkout by default', () => {
     const instructions = assemble();
     expect(instructions).toContain('single checked-out repository');
-    expect(instructions).toContain('cannot browse other repositories');
+    expect(instructions).toContain('do not reach other repositories');
   });
 
   it('lists readable repos and drops the "cannot browse" line when repos.read is set', () => {
@@ -89,9 +89,9 @@ describe('assemblePrompt — operating-environment note', () => {
       event,
       trigger: { mode: 'mention', explicit: true },
     }).instructions;
-    expect(instructions).toContain('READ access to these repositories: acme/infra, acme/shared');
+    expect(instructions).toContain('read files from these repositories: acme/infra, acme/shared');
     expect(instructions).toContain('GH_TOKEN');
-    expect(instructions).not.toContain('cannot browse other repositories');
+    expect(instructions).not.toContain('do not reach other repositories');
   });
 
   it("says 'any repository' for repos.read: all, and mentions gh on GitHub", () => {
@@ -112,7 +112,7 @@ describe('assemblePrompt — operating-environment note', () => {
       event: forgejoEvent,
       trigger: { mode: 'mention', explicit: true },
     }).instructions;
-    expect(instructions).toContain('Forgejo API');
+    expect(instructions).toContain('Forgejo contents API');
     expect(instructions).not.toContain('gh api');
     expect(instructions).toContain('GH_TOKEN');
   });
@@ -779,10 +779,11 @@ describe('renderContext — workspace state', () => {
     expect(messageWithWorkspace(unknown)).not.toContain('NOT this pull request');
   });
 
-  it('reports a detached HEAD and an unclean tree', () => {
+  it('reports an unclean tree, and says a detached HEAD is normal', () => {
     const { branch: _drop, ...detached } = clean;
     const out = messageWithWorkspace({ ...detached, status: ' M src/a.ts' });
-    expect(out).toContain('(detached HEAD)');
+    expect(out).toContain('detached HEAD');
+    expect(out).toContain('nothing to fix');
     expect(out).toContain('src/a.ts');
     expect(out).not.toContain('Working tree is clean.');
   });
@@ -1024,13 +1025,30 @@ describe('assemblePrompt: implement rounds', () => {
     expect(round({ context: blind }).message).not.toContain('## Continuous integration');
   });
 
-  it('drops the round sections outside a round', () => {
+  // A mention gets the conversation because it is routinely asked to act on one, and the model's
+  // own shell token cannot fetch it. It does not get the round's answer-every-thread contract, and
+  // it does not get CI, which only a round acts on.
+  it('gives a mention the conversation without the round contract, and no CI', () => {
     const { message } = assemblePrompt({
       mode: 'mention',
       config,
       context: roundContext,
       event,
       trigger: { mode: 'mention', explicit: true },
+    });
+    expect(message).toContain('## Open review feedback');
+    expect(message).toContain('do not go looking for it');
+    expect(message).not.toContain('Answer every one of these');
+    expect(message).not.toContain('## Continuous integration');
+  });
+
+  it('drops the round sections from a review', () => {
+    const { message } = assemblePrompt({
+      mode: 'review',
+      config,
+      context: roundContext,
+      event,
+      trigger: { mode: 'review', explicit: true },
     });
     expect(message).not.toContain('## Open review feedback');
     expect(message).not.toContain('## Continuous integration');
@@ -1072,5 +1090,33 @@ describe('assemblePrompt: the budget block', () => {
     expect(instructions).toContain('Do not run a repo-wide formatter');
     expect(instructions).toContain('limits.max_commit_files');
     expect(instructions).toContain('git status --short');
+  });
+});
+
+// The shell token is minted `contents: read` on the GitHub App path, and the forge answers a
+// missing permission with 404, so a run asked to act on a review reads its own pull request as
+// something that is not there. A Forgejo run carries the bot account's own token, whose scope
+// crab'd did not choose, so the 404 claim would be a guess there.
+describe('assemblePrompt: what the shell credential reaches', () => {
+  it('names the unreachable endpoints and the 404 on GitHub', () => {
+    const instructions = assemble();
+    expect(instructions).toContain('## What you can reach');
+    expect(instructions).toContain('`gh pr`');
+    expect(instructions).toContain('404');
+    expect(instructions).toContain('already in the context above');
+  });
+
+  it('leaves the 404 claim off Forgejo, and keeps the part that holds', () => {
+    const instructions = assemblePrompt({
+      mode: 'mention',
+      config: makeConfig({}),
+      context,
+      event: { ...event, forge: 'forgejo' } as ForgeEvent,
+      trigger: { mode: 'mention', explicit: true },
+    }).instructions;
+    expect(instructions).not.toContain('404');
+    expect(instructions).not.toContain('`gh pr`');
+    expect(instructions).toContain('Do not use it to read this forge');
+    expect(instructions).toContain('already in the context above');
   });
 });

@@ -12,12 +12,11 @@ From lowest to highest precedence:
 1. **Built-in defaults**: shipped with crab'd.
 2. **Org config repo**: `.crabd.yml` in `<owner>/.crabd-config` (configurable). The only layer that
    can _govern_.
-3. **Repo**: the target repo's `.crabd.yml`, read from the checkout.
-4. **Repo, trusted**: `permissions.*`, `governance.*`, and `prompt.override`, read from the repo's
-   default branch on a pull request. See
-   [Permissions, governance, and the prompt on a pull request](#permissions-governance-and-the-prompt-on-a-pull-request).
-5. **CI inputs**: `with:` inputs on the action (`model`, `trigger-phrase`, `providers`, ...).
-6. **Environment**: an advanced `CRABD_CONFIG_ENV` YAML blob.
+3. **Repo**: the target repo's `.crabd.yml`. Read from the checkout, except on a pull request,
+   where it's read from the default branch. See
+   [The repo layer on a pull request](#the-repo-layer-on-a-pull-request).
+4. **CI inputs**: `with:` inputs on the action (`model`, `trigger-phrase`, `providers`, ...).
+5. **Environment**: an advanced `CRABD_CONFIG_ENV` YAML blob.
 
 Higher layers win, but _how_ they win depends on the value.
 
@@ -81,15 +80,17 @@ openai]` is ignored. Locked keys ignore the repo, CI inputs, **and** env.
 Replacing the base prompt is off by default and only permitted for repos the org names. See
 [Custom prompts → full override](/custom-prompts/#replacing-the-base-prompt-full-override).
 
-## Permissions, governance, and the prompt on a pull request
+## The repo layer on a pull request
 
-Three sections are read from a different place on a pull request. crab'd reads
-`permissions.*`, `governance.*`, and `prompt.override` from the repository's **default
-branch**. This is the `repoTrusted` layer.
+On a pull request, the whole repo layer is read from the repository's **default branch**, and the
+`.crabd.yml` in the checkout is ignored.
 
 ```yaml title="default branch: .crabd.yml"
 permissions:
   secret_scan: false
+modes:
+  implement:
+    enabled: true
 ```
 
 ```yaml title="PR checkout: .crabd.yml"
@@ -97,12 +98,25 @@ permissions:
   secret_scan: true
 ```
 
-Resolved: `permissions.secret_scan = false`. The PR checkout's `true` never contributes, and a
-setting pushed to the default branch takes effect on an already-open pull request.
+Resolved: `secret_scan` is `false` and `implement` is enabled. The checkout's file contributes
+nothing, including the keys it happens to be the only one setting, and a setting pushed to the
+default branch takes effect on an already-open pull request.
 
-crab'd skips the extra fetch, and uses the checkout as-is, when the run isn't on a pull request or
-when the PR's head branch is already the default branch. An absent, empty, or unparseable file on
-the default branch falls back to the org and built-in layers.
+Nearly every key decides how the run treats the change it's looking at. `permissions` grants the
+write token, `modes` picks which mode runs and what it's told, `prompt` and `review` rewrite the
+model's instructions, `sandbox.env` forwards named secrets into a shell the same file can steer,
+and `providers.custom` points the model call at an arbitrary endpoint. A pull request head is
+contributor-controlled, so it sets none of them.
+
+A `crabd.config.ts` extension is skipped on a pull request for the same reason: it's code, and it
+runs inside the process holding crab'd's forge token.
+
+crab'd uses the checkout as-is, with no extra fetch, when the run isn't on a pull request or when
+the PR's head branch is already the default branch. An absent, empty, or unparseable file on the
+default branch falls back to the org and built-in layers.
+
+To test a `.crabd.yml` change, merge it to the default branch, then re-run on the open pull
+request with a mention.
 
 ## Reading the org config repo
 

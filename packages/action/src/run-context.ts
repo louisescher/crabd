@@ -382,5 +382,9 @@ export function mcpConnections(): McpConnectionDefinition[] {
 export function configuredWebSearchTools(): ToolDefinition[] {
   const { webSearch } = runContext();
   if (!webSearch.enabled) return [];
-  return webSearchTools({ maxResults: webSearch.maxResults });
+  let forgeHost: string | undefined;
+  try {
+    forgeHost = new URL(process.env.GITHUB_SERVER_URL ?? 'https://github.com').hostname;
+  } catch {}
+  return webSearchTools({ maxResults: webSearch.maxResults, ...(forgeHost ? { forgeHost } : {}) });
 }

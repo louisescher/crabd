@@ -48,42 +48,18 @@ function checkoutMayBeUntrusted(event: ForgeEvent): boolean {
 }
 
 /**
- * Split a partial into the sections only the default branch may set (`permissions`, `governance`,
- * and `prompt.override`, which grants the same authority by another route) and everything else.
- */
-function splitTrustedSections(partial: CrabdConfigPartial): {
-  trusted?: CrabdConfigPartial;
-  rest: CrabdConfigPartial;
-} {
-  const { permissions, governance, prompt, ...others } = partial;
-  const { override, allow_full_override, ...promptRest } = prompt ?? {};
-  const trustedPrompt =
-    override !== undefined || allow_full_override !== undefined
-      ? {
-          ...(override !== undefined ? { override } : {}),
-          ...(allow_full_override !== undefined ? { allow_full_override } : {}),
-        }
-      : undefined;
-
-  const rest: CrabdConfigPartial = {
-    ...others,
-    ...(Object.keys(promptRest).length > 0 ? { prompt: promptRest } : {}),
-  };
-  if (!permissions && !governance && !trustedPrompt) return { rest };
-  return {
-    trusted: {
-      ...(permissions ? { permissions } : {}),
-      ...(governance ? { governance } : {}),
-      ...(trustedPrompt ? { prompt: trustedPrompt } : {}),
-    },
-    rest,
-  };
-}
-
-/**
- * `permissions.*` / `governance.*` for a pull request run, read from the repository's default
- * branch instead of the checkout so a PR cannot grant itself permissions it is then reviewed
- * under. Call only when {@link checkoutMayBeUntrusted} is true.
+ * The repository's own config layer for a pull request run, read from the default branch instead
+ * of the checkout.
+ *
+ * A pull request head is contributor-controlled, and nearly every key in the file decides how the
+ * run treats the change it is reviewing: `permissions` grants the write token, `modes` picks which
+ * mode runs and injects its instructions, `prompt` and `review` rewrite what the model is told,
+ * `sandbox.env` forwards named secrets into a shell the same file can steer, and `providers.custom`
+ * points the model call at an arbitrary endpoint. Splitting that into trusted and untrusted halves
+ * meant relitigating the boundary with every new key, so the whole layer comes from the branch a
+ * maintainer already reviewed.
+ *
+ * Call only when {@link checkoutMayBeUntrusted} is true.
  */
 async function loadRepoTrustedLayer(
   adapter: ForgeAdapter,
@@ -92,29 +68,27 @@ async function loadRepoTrustedLayer(
 ): Promise<CrabdConfigPartial | undefined> {
   const source = await adapter.readOrgConfig(event.repo.slug, configPathRel);
   if (!source) {
-    log(`no default-branch ${configPathRel} found for ${event.repo.slug}; the trusted sections fall through to the org and default layers for this pull request run.`);
+    log(`no default-branch ${configPathRel} found for ${event.repo.slug}; this pull request run falls through to the org and default layers.`);
     return undefined;
   }
 
-  let parsed: CrabdConfigPartial;
   try {
-    parsed = parseConfigYaml(source);
+    return parseConfigYaml(source);
   } catch (error) {
     log(
-      `default-branch ${configPathRel} could not be parsed, ignoring it for the trusted sections: ${error instanceof Error ? error.message : String(error)}`,
+      `default-branch ${configPathRel} could not be parsed, ignoring the repository layer for this run: ${error instanceof Error ? error.message : String(error)}`,
     );
     return undefined;
   }
-
-  const { trusted } = splitTrustedSections(parsed);
-  return trusted;
 }
 
 /**
  * Resolve the layered config for this run:
- * built-in defaults → org config repo → repo `.crabd.yml` → repo default branch (the sections a
- * pull request may not set for itself) → CI inputs → env, with org-locked keys and full-override
- * gating handled by {@link resolveConfig}.
+ * built-in defaults → org config repo → the repository's own `.crabd.yml` → CI inputs → env, with
+ * org-locked keys and full-override gating handled by {@link resolveConfig}.
+ *
+ * The repository layer is read from the checkout, except on a pull request whose head is not the
+ * default branch, where it is fetched from the default branch and the checkout's copy is ignored.
  */
 export async function loadResolvedConfig(input: {
   adapter: ForgeAdapter;
@@ -131,15 +105,22 @@ export async function loadResolvedConfig(input: {
   const orgSource = await adapter.readOrgConfig(orgRepoSlug, orgConfigPath);
   const org = orgSource ? parseConfigYaml(orgSource) : undefined;
 
-  // Repo layer: the checked-out repo's `.crabd.yml`. On an untrusted checkout, `permissions.*` /
-  // `governance.*` are stripped here and read from the default branch instead, below.
+  // Repo layer: the repository's own `.crabd.yml`, from the checkout unless a contributor controls it.
   const repoConfigPathRel = env.CRABD_CONFIG_PATH ?? '.crabd.yml';
   const repoConfigFile = join(cwd, repoConfigPathRel);
-  const repoFull = existsSync(repoConfigFile) ? parseConfigYaml(readFileSync(repoConfigFile, 'utf-8')) : undefined;
-
+  const checkoutHasConfig = existsSync(repoConfigFile);
   const untrustedCheckout = checkoutMayBeUntrusted(event);
-  const repo = untrustedCheckout && repoFull ? splitTrustedSections(repoFull).rest : repoFull;
-  const repoTrusted = untrustedCheckout ? await loadRepoTrustedLayer(adapter, event, repoConfigPathRel) : undefined;
+
+  let repo: CrabdConfigPartial | undefined;
+  let repoTrusted: CrabdConfigPartial | undefined;
+  if (untrustedCheckout) {
+    repoTrusted = await loadRepoTrustedLayer(adapter, event, repoConfigPathRel);
+    if (checkoutHasConfig) {
+      log(`${repoConfigPathRel} in this checkout belongs to the pull request head, so it is ignored; the repository layer comes from ${event.repo.defaultBranch}.`);
+    }
+  } else if (checkoutHasConfig) {
+    repo = parseConfigYaml(readFileSync(repoConfigFile, 'utf-8'));
+  }
 
   // Inputs layer: friendly action inputs. Env layer: an advanced YAML override blob.
   const inputs = inputsPartial(env);
@@ -156,8 +137,14 @@ export async function loadResolvedConfig(input: {
     },
   });
 
+  // The extension is real code, loaded into this process, which holds the write-capable forge
+  // token. A pull request head may not supply it for the run that reviews it.
   const extensionFile = join(cwd, env.CRABD_EXTENSION_PATH_REL ?? 'crabd.config.ts');
-  const extensionPath = existsSync(extensionFile) ? extensionFile : undefined;
+  const hasExtension = existsSync(extensionFile);
+  if (hasExtension && untrustedCheckout) {
+    log(`${env.CRABD_EXTENSION_PATH_REL ?? 'crabd.config.ts'} in this checkout belongs to the pull request head, so it is not loaded.`);
+  }
+  const extensionPath = hasExtension && !untrustedCheckout ? extensionFile : undefined;
 
   return { config, ...(extensionPath ? { extensionPath } : {}) };
 }

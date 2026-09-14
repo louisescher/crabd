@@ -315,6 +315,16 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
       }
     } catch {}
     roundClaim = claim;
+  } else if (resolvedTrigger.mode === 'mention' && context.pullRequest) {
+    // A mention on a pull request is routinely asked to act on a review ("address the finding",
+    // "you were wrong about that"). The conversation is not in `getContext`, and the model's shell
+    // token cannot reach it either, so without this the run spends its budget on forge API calls
+    // that answer 404 and then rebuilds the feedback by reading the repository.
+    const conversation = await attachRoundContext(adapter, context, {
+      maxThreads: config.implement.rounds.maxThreads,
+      checks: false,
+    });
+    inheritedAdvisories.push(...conversation.advisories);
   }
 
   const modeCfg = config.modes[resolvedTrigger.mode];

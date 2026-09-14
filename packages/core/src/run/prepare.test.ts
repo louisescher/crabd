@@ -484,3 +484,80 @@ describe('prepareRun feedback rounds', () => {
     expect(adapter.listReviewThreads).not.toHaveBeenCalled();
   });
 });
+
+// A mention on a pull request is routinely asked to act on a review. The model's shell token reads
+// repository contents only, so a conversation it was not handed is one it cannot go and fetch: one
+// run spent six tool calls on forge API calls that answered 404, then rebuilt the finding by
+// reading the source tree.
+describe('prepareRun: a mention on a pull request', () => {
+  const thread = {
+    id: 'T9', rootCommentId: 41, path: 'src/b.ts', line: 7, isResolved: false, rootIsCrabd: true,
+    comments: [{ id: 41, author: 'crabd', body: 'missing a render test', createdAt: '' }],
+  };
+
+  it('fetches the open conversation and the submitted reviews', async () => {
+    const adapter = fakeAdapter({
+      listReviewThreads: vi.fn(async () => [thread]),
+      listReviews: vi.fn(async () => [
+        { id: 91, state: 'commented' as const, body: 'one finding', author: 'crabd', submittedAt: '' },
+      ]),
+    });
+    const outcome = await prepareRun({
+      adapter,
+      config: config(['MEMBER']),
+      event: commentEvent('/crabd address the finding'),
+      cwd: '/nonexistent',
+    });
+
+    expect(outcome.status).toBe('run');
+    if (outcome.status !== 'run') return;
+    expect(outcome.plan.mode).toBe('mention');
+    expect(adapter.listReviewThreads).toHaveBeenCalledWith(8);
+    expect(outcome.context.reviewThreads).toEqual([thread]);
+    expect(outcome.plan.message).toContain('missing a render test');
+  });
+
+  it('leaves the check state alone, which only a round acts on', async () => {
+    const adapter = fakeAdapter({ listReviewThreads: vi.fn(async () => [thread]) });
+    await prepareRun({
+      adapter,
+      config: config(['MEMBER']),
+      event: commentEvent('/crabd address the finding'),
+      cwd: '/nonexistent',
+    });
+    expect(adapter.listChecks).not.toHaveBeenCalled();
+  });
+
+  it('runs anyway when the conversation cannot be read', async () => {
+    const adapter = fakeAdapter({
+      listReviewThreads: vi.fn(async () => {
+        throw new Error('403');
+      }),
+    });
+    const outcome = await prepareRun({
+      adapter,
+      config: config(['MEMBER']),
+      event: commentEvent('/crabd what do you think'),
+      cwd: '/nonexistent',
+    });
+    expect(outcome.status).toBe('run');
+  });
+
+  it('does not fetch a conversation for an issue', async () => {
+    const adapter = fakeAdapter({
+      getContext: vi.fn(async (): Promise<ForgeContext> => ({
+        repo,
+        issue: { number: 8, title: 'bug', body: '', author: 'lescher', labels: [], state: 'open' },
+        comments: [],
+        changedFiles: [],
+      })),
+    });
+    await prepareRun({
+      adapter,
+      config: config(['MEMBER']),
+      event: { ...commentEvent('/crabd have a look'), isPullRequest: false },
+      cwd: '/nonexistent',
+    });
+    expect(adapter.listReviewThreads).not.toHaveBeenCalled();
+  });
+});

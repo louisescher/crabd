@@ -14,15 +14,20 @@ export interface RoundContextResult {
 }
 
 /**
- * Fetch the open feedback and CI state a round needs and attach it to the context.
+ * Fetch the open feedback, and for a round the CI state, and attach both to the context.
  *
  * Every fetch is best-effort and independent: a round with no check state is still a round, and a
  * missing permission is worth one advisory rather than a failed run.
+ *
+ * A mention on a pull request calls this with `checks: false`. The conversation is the expensive
+ * thing to be missing: the model's own shell token cannot read review threads, so a mention asked
+ * to act on a review that it was not shown will spend its budget trying to fetch one and then
+ * reconstruct it from the files. The check state is a larger fetch that only a round acts on.
  */
 export async function attachRoundContext(
   adapter: ForgeAdapter,
   context: ForgeContext,
-  options: { maxThreads: number },
+  options: { maxThreads: number; checks?: boolean },
 ): Promise<RoundContextResult> {
   const pr = context.pullRequest;
   const advisories: string[] = [];
@@ -63,7 +68,7 @@ export async function attachRoundContext(
   }
 
   const feedbackToken = `${reviewId}.${commentId}.${threadCount}`;
-  if (!pr.headSha) return { feedbackToken, advisories };
+  if (options.checks === false || !pr.headSha) return { feedbackToken, advisories };
 
   try {
     const checks = await adapter.listChecks(pr.headSha);

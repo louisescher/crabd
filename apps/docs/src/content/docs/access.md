@@ -21,9 +21,21 @@ repos:
 ```
 
 crab'd mints a **read-only** forge token scoped to what you allow, exposes it to the model's shell as
-`GH_TOKEN` (with `git` preconfigured to use it), and tells the agent it may read those repos — using
-`gh api` for a single file, or `git clone` for a whole repo. It can **never write** to them; its
+`GH_TOKEN` (with `git` preconfigured to use it), and tells the agent it may read those repos, using
+`gh api` for a single file or `git clone` for a whole repo. It can **never write** to them, and its
 commits only ever land in the trigger repo.
+
+### What the shell token can't do
+
+The token carries `contents: read` and `metadata: read`, which covers files and nothing else. Pull
+requests, issues, comments, reviews and CI runs are out of scope, and GitHub answers a missing
+permission with `404`, the same code it uses for something that doesn't exist. An agent that tries
+one reads its own repository as missing.
+
+crab'd handles this from both ends. The prompt says which endpoints are unreachable and why, and
+`gh pr`, `gh issue`, `gh run` and the matching `gh api` paths are refused in the sandbox with the
+same explanation. The agent doesn't need them: the subject description, diff, changed files,
+comments and open review conversation are all in its context already.
 
 ### Requirements
 

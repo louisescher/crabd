@@ -10,6 +10,8 @@ export interface SearchResult {
 
 /** Per-request deadline so a slow endpoint can't hang the whole turn. */
 const REQUEST_TIMEOUT_MS = 10_000;
+/** Characters of stripped page text `fetch_url` keeps. Stated in the tool description. */
+const FETCH_TEXT_LIMIT = 20_000;
 
 function isBlockedIpv4(ip: string): boolean {
   const parts = ip.split('.').map(Number);
@@ -121,7 +123,21 @@ async function duckduckgoSearch(query: string, maxResults: number): Promise<Sear
  * library versions, changelogs, issues, APIs. `web_search` finds sources;
  * `fetch_url` reads one.
  */
-export function webSearchTools(options: { maxResults: number }): ToolDefinition[] {
+export function webSearchTools(options: { maxResults: number; forgeHost?: string }): ToolDefinition[] {
+  // The forge's own pages are not reachable this way: a private repository answers 404 to an
+  // unauthenticated fetch, and a public one returns a page of navigation chrome. A run that could
+  // not read a review through `gh` tries the web page next, so the refusal says where the data is.
+  const forgeHost = options.forgeHost?.toLowerCase();
+  const isForgeUrl = (raw: string): boolean => {
+    if (!forgeHost) return false;
+    try {
+      const host = new URL(raw).hostname.toLowerCase();
+      return host === forgeHost || host === `www.${forgeHost}`;
+    } catch {
+      return false;
+    }
+  };
+
   return [
     defineTool({
       name: 'web_search',
@@ -149,10 +165,18 @@ export function webSearchTools(options: { maxResults: number }): ToolDefinition[
     }),
     defineTool({
       name: 'fetch_url',
-      description: 'Fetch a web page (e.g. docs or an issue found via web_search) and return its text content.',
+      description: `Fetch a web page (documentation, a changelog, a page found via web_search) and return its text with the markup stripped. Times out after ${Math.round(REQUEST_TIMEOUT_MS / 1000)}s and keeps the first ${FETCH_TEXT_LIMIT.toLocaleString('en-US')} characters, so link to the specific page, not a site root. Pages on this forge are not readable here and are refused.`,
       input: v.object({ url: v.string() }),
       output: v.object({ url: v.string(), text: v.string() }),
       async run({ data }) {
+        if (isForgeUrl(data.url)) {
+          return {
+            output: {
+              url: data.url,
+              text: `(refused: ${forgeHost} pages are not readable from this run. The pull request or issue you are working on, its description, diff, comments and open review conversation, is already in your context. Read it there.)`,
+            },
+          };
+        }
         try {
           await assertPublicUrl(data.url);
         } catch (error) {
@@ -165,7 +189,7 @@ export function webSearchTools(options: { maxResults: number }): ToolDefinition[
           });
           if (!res.ok) return { output: { url: data.url, text: `(failed to fetch: HTTP ${res.status})` } };
           const text = htmlToText(await res.text());
-          return { output: { url: data.url, text: text.slice(0, 20_000) } };
+          return { output: { url: data.url, text: text.slice(0, FETCH_TEXT_LIMIT) } };
         } catch (error) {
           return { output: { url: data.url, text: `(failed to fetch: ${error instanceof Error ? error.message : String(error)})` } };
         }

@@ -7,6 +7,13 @@ REAL_CLI=/usr/bin/gh
 READ_ONLY_VERBS="list view status diff checks download log view-log help"
 READ_ONLY_COMMANDS="search browse status version help completion"
 
+# Commands whose data this token cannot read at all. crabd mints the sandbox credential with
+# permission for repository contents and nothing else, and the forge answers a missing permission
+# with 404, so these look to the agent like a repository that does not exist. Refusing here, with
+# the reason, costs one tool call. Letting them through costs a run: one spent six calls on
+# `gh pr view`, three `gh api` paths and a web fetch before concluding the repo was private.
+UNREADABLE_COMMANDS="pr issue run workflow release cache secret variable label project ruleset"
+
 command=""
 verb=""
 for arg in "$@"; do
@@ -23,6 +30,15 @@ for arg in "$@"; do
   esac
 done
 
+no_permission() {
+  printf 'crabd: "%s" cannot work in this sandbox. The token here reads repository files only.\n\n' "$1" >&2
+  printf 'Pull requests, issues, comments, reviews and CI runs answer 404 for that reason, not\n' >&2
+  printf 'because they are missing. Another spelling of the same request returns the same 404.\n\n' >&2
+  printf 'You already have this. The subject description, the diff, the changed files, the\n' >&2
+  printf 'comments and the open review conversation are in your context. Read them there.\n' >&2
+  exit 1
+}
+
 refuse() {
   printf 'crabd: "%s" is not available in this sandbox. Only reads work here.\n\n' "$1" >&2
   printf 'The forge CLI is here so you can read repositories crabd granted you. Everything\n' >&2
@@ -31,6 +47,10 @@ refuse() {
   printf 'Report what you found and let the harness post it.\n' >&2
   exit 1
 }
+
+for unreadable in $UNREADABLE_COMMANDS; do
+  [ "$command" = "$unreadable" ] && no_permission "gh $command${verb:+ $verb}"
+done
 
 for allowed in $READ_ONLY_COMMANDS; do
   [ "$command" = "$allowed" ] && exec "$REAL_CLI" "$@"
@@ -51,6 +71,16 @@ if [ "$command" = "api" ]; then
         ;;
     esac
   done
+  # Same 404 as the commands above, reached by path instead. `contents` and the other file-level
+  # endpoints stay open, which is what the token was minted for.
+  path=${verb%%\?*}
+  case "$path" in
+    */pulls | */pulls/* | */issues | */issues/* | */comments | */comments/* | \
+    */reviews | */reviews/* | */actions | */actions/* | */check-runs | */check-runs/* | \
+    */check-suites | */check-suites/* | */timeline | */reactions)
+      no_permission "gh api $path"
+      ;;
+  esac
   exec "$REAL_CLI" "$@"
 fi
 

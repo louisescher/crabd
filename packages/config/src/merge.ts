@@ -152,12 +152,12 @@ export interface ConfigLayers {
   defaults?: CrabdConfigPartial;
   /** From the org config repo — may carry `governance`. */
   org?: CrabdConfigPartial;
-  /** The target repo's `.crabd.yml`, read from the checkout (the PR head, on a pull request). */
+  /** The target repo's `.crabd.yml`, read from the checkout. Absent on a pull request run. */
   repo?: CrabdConfigPartial;
   /**
-   * `permissions.*` and `governance.*` read from the repo's default branch instead of the
-   * checkout, so a pull request cannot use its own head to relax the permissions it is checked
-   * against.
+   * The target repo's `.crabd.yml` read from its default branch, used in place of {@link repo} on
+   * a pull request whose head is not that branch. A contributor-controlled head would otherwise
+   * decide the permissions, mode, prompt and sandbox of the run reviewing it.
    */
   repoTrusted?: CrabdConfigPartial;
   /** CI action inputs mapped to a partial. */
