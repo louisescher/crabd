@@ -494,8 +494,10 @@ const COMMIT_CONTRACT = [
   "crab'd commits for you. Edit files in the checkout and stop there: the harness collects what changed, scans it, and commits it to the right branch under its own identity.",
   '`git` in your shell cannot change this repository. `commit`, `add`, `push`, `merge`, `rebase`, `pull`, `checkout`, `branch`, `reset` and `stash` are refused, as are the forge CLI verbs that post or merge anything. Reading (`status`, `log`, `diff`, `show`, `blame`) works, and so does cloning another repository you were granted.',
   'You cannot merge, rebase, or rewrite history. To bring this branch up to date with its base, call `update_branch` before you edit anything. If it reports a conflict, say so and stop: resolving it is the author\'s call, not yours.',
-  'Everything you leave modified in the checkout gets committed, so leave modified only what you meant to change. Do not run a repo-wide formatter, a linter with `--fix`, a dependency install, or `dedupe`: those rewrite thousands of files, and the commit is refused when it grows past `limits.max_commit_files`. Format the files you edited, by path.',
-  'Before you submit, run `git status --short` and confirm the list is the change you were asked for. If something crept in, put it back.',
+  "crab'd commits every file whose contents changed while you were working, including files you did not mean to touch. A command that rewrites files rewrites them into your commit.",
+  'So do not run a repo-wide formatter or fixer: `pnpm format`, `npm run format`, `prettier --write .`, `eslint --fix .`, `gofmt -w .`, a dependency install, or `pnpm dedupe`. They rewrite thousands of files, the commit is refused past `limits.max_commit_files`, and they rewrite whatever else the workflow left in the checkout. Format only the files you edited, by passing their paths.',
+  'Untracked files a build or a test run leaves behind are not your problem. A new directory of build output is skipped, and so is anything that looks like a credential. Do not edit `.gitignore` to hide them: that edit is itself a change, and it lands in your commit.',
+  'Before you submit, run `git status --short` and check that the tracked files it lists are the change you were asked for. Put back anything you changed by accident, and leave untracked build output alone.',
 ].join('\n');
 
 /** Scope for a mention. `implement:round` has its own version in {@link ROUND_SCOPE}. */

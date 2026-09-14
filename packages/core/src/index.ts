@@ -133,6 +133,7 @@ export {
   type BaselineEntry,
   type CollectOptions,
 } from './git/changes.ts';
+export { isGeneratedCredentialFile, looksLikeCredential, SensitivePathError } from './git/sensitive.ts';
 export { mapWithConcurrency } from './util/pool.ts';
 export { checkoutPrHead, resolveWorkspace, type GitEnv, type WorkspaceState } from './git/workspace.ts';
 export { stripCheckoutCredentials } from './git/credentials.ts';

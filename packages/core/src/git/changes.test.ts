@@ -10,6 +10,7 @@ import {
   snapshotBaseline,
   TooManyChangesError,
 } from './changes.ts';
+import { SensitivePathError } from './sensitive.ts';
 
 let dir: string;
 
@@ -173,5 +174,86 @@ describe('collectChangesSinceBaseline: the file ceiling', () => {
 
     expect(collectChangesSinceBaseline(wide, baseline)).toHaveLength(12);
     expect(collectChangesSinceBaseline(wide, baseline, { maxFiles: 0 })).toHaveLength(12);
+  });
+});
+
+// The case this guards against, end to end. A repository with the secret scan off ran a repo-wide
+// `prettier --write`, which reformatted the `gha-creds-*.json` that `google-github-actions/auth`
+// writes into the workspace. The rewrite changed its hash, the baseline stopped recognising it as
+// pre-existing, and it went into the commit.
+describe('collectChangesSinceBaseline: credentials in the checkout', () => {
+  let repo: string;
+
+  function run(args: string[]): void {
+    execFileSync('git', args, { cwd: repo });
+  }
+
+  beforeAll(() => {
+    repo = mkdtempSync(join(tmpdir(), 'crabd-creds-'));
+    run(['init', '-q']);
+    run(['config', 'user.email', 't@example.com']);
+    run(['config', 'user.name', 'Test']);
+    writeFileSync(join(repo, 'app.ts'), 'export const a = 1;\n');
+    run(['add', '-A']);
+    run(['commit', '-q', '-m', 'init']);
+  });
+
+  afterAll(() => rmSync(repo, { recursive: true, force: true }));
+
+  it('drops a workflow-generated credentials file a formatter rewrote after the baseline', () => {
+    writeFileSync(join(repo, 'gha-creds-07aacde2c992b73b.json'), '{"type":"external_account"}');
+    const baseline = snapshotBaseline(repo);
+
+    writeFileSync(join(repo, 'gha-creds-07aacde2c992b73b.json'), '{\n  "type": "external_account"\n}\n');
+    writeFileSync(join(repo, 'app.ts'), 'export const a = 2;\n');
+
+    const changes = collectChangesSinceBaseline(repo, baseline);
+    expect(changes.map((c) => c.path)).toEqual(['app.ts']);
+  });
+
+  it('drops it even when it appears for the first time mid-run', () => {
+    const baseline = snapshotBaseline(repo);
+    writeFileSync(join(repo, 'gha-creds-deadbeef.json'), '{"type":"service_account"}');
+    writeFileSync(join(repo, 'app.ts'), 'export const a = 3;\n');
+
+    const changes = collectChangesSinceBaseline(repo, baseline);
+    expect(changes.map((c) => c.path)).toEqual(['app.ts']);
+    rmSync(join(repo, 'gha-creds-deadbeef.json'));
+  });
+
+  it('refuses the whole commit when an untracked path looks like a credential', () => {
+    const baseline = snapshotBaseline(repo);
+    writeFileSync(join(repo, '.env'), 'API_KEY=live-key\n');
+
+    let thrown: unknown;
+    try {
+      collectChangesSinceBaseline(repo, baseline);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(SensitivePathError);
+    expect((thrown as SensitivePathError).paths).toEqual(['.env']);
+    rmSync(join(repo, '.env'));
+  });
+
+  it('commits a tracked credential-shaped path, which the repository chose to track', () => {
+    writeFileSync(join(repo, 'fixtures.pem'), 'placeholder\n');
+    run(['add', '-A']);
+    run(['commit', '-q', '-m', 'add fixture']);
+
+    const baseline = snapshotBaseline(repo);
+    writeFileSync(join(repo, 'fixtures.pem'), 'updated placeholder\n');
+
+    const changes = collectChangesSinceBaseline(repo, baseline);
+    expect(changes.map((c) => c.path)).toEqual(['fixtures.pem']);
+  });
+
+  it('allows an untracked .env.example, which repositories add on purpose', () => {
+    const baseline = snapshotBaseline(repo);
+    writeFileSync(join(repo, '.env.example'), 'API_KEY=\n');
+
+    const changes = collectChangesSinceBaseline(repo, baseline);
+    expect(changes.map((c) => c.path)).toContain('.env.example');
+    rmSync(join(repo, '.env.example'));
   });
 });

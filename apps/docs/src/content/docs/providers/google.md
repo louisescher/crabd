@@ -33,8 +33,8 @@ providers:
 Use `google-vertex` when you want Gemini billed and governed through Google Cloud. It authenticates
 with **Application Default Credentials**, a service-account key the runner can read.
 
-1. Create a service account with Vertex AI access and download its JSON key (or use
-   [`google-github-actions/auth`](https://github.com/google-github-actions/auth) to provide ADC).
+1. Set up [Workload Identity Federation](https://github.com/google-github-actions/auth#preferred-direct-workload-identity-federation)
+   for the repository, so the runner gets a short-lived token and there's no key to leak.
 2. Provide the ADC file path and your project/location via env.
 
 ```yaml title=".crabd.yml"
@@ -45,8 +45,10 @@ providers:
 
 ```yaml title="workflow"
 - uses: google-github-actions/auth@v2
+  id: auth
   with:
-    credentials_json: ${{ secrets.GCP_SA_KEY }}
+    workload_identity_provider: projects/123/locations/global/workloadIdentityPools/gh/providers/gh
+    service_account: crabd@my-gcp-project.iam.gserviceaccount.com
 - uses: louisescher/crabd@v0
   with:
     model: google-vertex/gemini-2.5-pro
@@ -55,6 +57,16 @@ providers:
     GOOGLE_CLOUD_PROJECT: my-gcp-project
     GOOGLE_CLOUD_LOCATION: us-central1
 ```
+
+:::caution
+`google-github-actions/auth` writes its credentials file into `$GITHUB_WORKSPACE`, which is the
+repository checkout the agent works in. Add `gha-creds-*.json` to your `.gitignore`.
+
+crab'd drops that file from every commit, whatever the baseline says about it, and refuses a commit
+that carries any other untracked path shaped like a credential. Treat both as the last line rather
+than the plan: a key you never download is a key that can't be committed, which is why the steps
+above use federation over `credentials_json`.
+:::
 
 :::note
 `google` and `google-vertex` are distinct provider IDs — allowlist whichever you use, and match it in

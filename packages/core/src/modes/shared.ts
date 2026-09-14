@@ -1,6 +1,7 @@
 import type { ForgeContext, ForgeEvent } from '../forge/types.ts';
 import type { ForgeAdapter } from '../forge/types.ts';
 import { type Baseline, collectChangesSinceBaseline, hasChanges, TooManyChangesError } from '../git/changes.ts';
+import { SensitivePathError } from '../git/sensitive.ts';
 import { renderVetFailureMessage, scanForSecrets } from '../git/vet.ts';
 import { log } from '../logger.ts';
 
@@ -45,6 +46,23 @@ function renderTooManyChangesMessage(error: TooManyChangesError): string {
 }
 
 /**
+ * What a caller sees when the commit would have carried a credential.
+ *
+ * Named rather than summarised, because the person reading it has to go and rotate something, and
+ * the first question is always which file. The likely cause is named too: the file is untracked and
+ * looked pre-existing to the baseline until something rewrote it.
+ */
+function renderSensitivePathMessage(error: SensitivePathError): string {
+  const paths = error.paths.map((path) => `\`${path}\``).join(', ');
+  const plural = error.paths.length > 1;
+  return [
+    `crabd: refusing to commit ${paths}. ${plural ? 'Those paths look' : 'That path looks'} like a credential, and ${plural ? 'they are' : 'it is'} not tracked in this repository.`,
+    'A workflow step that writes a credential into the checkout, or a repo-wide formatter that rewrote one, is the usual cause.',
+    `Move the file outside the checkout or add it to \`.gitignore\`, then run again. ${plural ? 'If they are' : 'If it is'} meant to be in the repository, commit ${plural ? 'them' : 'it'} yourself.`,
+  ].join(' ');
+}
+
+/**
  * Commit the working-tree changes the model made to `branch` via the forge API.
  * Returns `false` (committing nothing) when the working tree is clean.
  *
@@ -64,6 +82,7 @@ export async function commitWorkingChanges(options: CommitOptions): Promise<bool
       ...(options.maxFiles !== undefined ? { maxFiles: options.maxFiles } : {}),
     });
   } catch (error) {
+    if (error instanceof SensitivePathError) throw new Error(renderSensitivePathMessage(error));
     if (error instanceof TooManyChangesError) throw new Error(renderTooManyChangesMessage(error));
     throw error;
   }

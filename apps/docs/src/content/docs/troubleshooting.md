@@ -207,8 +207,12 @@ nothing to reject.
 
 A change this wide almost always comes from a command that rewrites the whole repository: a
 repo-wide formatter, a linter run with `--fix`, `pnpm install`, or `pnpm dedupe`. crab'd commits
-everything left modified in the checkout, so one of those buries the change you asked for under
-thousands of unrelated files. The prompt tells the agent to avoid them and to format by path.
+every file whose contents changed during the run, so one of those buries the change you asked for
+under thousands of unrelated files, and reaches anything else the workflow left in the checkout.
+The prompt names those commands and tells the agent to format by path.
+
+Untracked build output is skipped, so a new `dist/` or store directory a test run leaves behind
+never reaches the commit and never needs a `.gitignore` entry.
 
 What to change:
 
@@ -220,6 +224,34 @@ What to change:
    limits:
      max_commit_files: 1000 # default 200, or 0 for no ceiling
    ```
+
+## The commit carried a credential
+
+> `refusing to commit \`.env\`. That path looks like a credential, and it is not tracked in this repository.`
+
+crab'd checks the paths in a commit before it reads any of them, independently of the gitleaks scan
+below. An untracked path shaped like a credential (`.env`, `*.pem`, `*.key`, `id_rsa`, a
+`service-account*.json`, `kubeconfig`, and similar) refuses the whole commit.
+
+Only untracked paths are checked. A repository that already tracks `test/fixtures/key.pem` has made
+that decision, and a run editing it commits normally. `.env.example` and the other `.example` /
+`.sample` / `.template` suffixes are exempt.
+
+The usual cause is a workflow step that writes a credential into the checkout.
+`google-github-actions/auth` puts its ADC file in `$GITHUB_WORKSPACE`, and
+`aws-actions/configure-aws-credentials` can be pointed there too. crab'd drops the files it
+recognises as generated (`gha-creds-*.json`, `.aws/credentials`,
+`application_default_credentials.json`) from every commit, whatever the baseline says about them,
+and logs the drop.
+
+What to change:
+
+1. **Add the path to `.gitignore`**, or write the credential outside the checkout.
+2. **Check why it changed.** A pre-existing file is normally invisible to the commit, because crab'd
+   only commits what changed during the run. A repo-wide formatter reaches these files too: one run
+   ran `prettier --write .`, which reformatted the workspace's ADC file and made it look like the
+   run's own work.
+3. **Commit it yourself** if it genuinely belongs in the repository.
 
 ## The secret scanner could not run
 

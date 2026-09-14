@@ -1087,7 +1087,7 @@ describe('assemblePrompt: the budget block', () => {
   it('warns a writable run off repo-wide commands', () => {
     registerBuiltinModes();
     const instructions = assemble();
-    expect(instructions).toContain('Do not run a repo-wide formatter');
+    expect(instructions).toContain('do not run a repo-wide formatter or fixer');
     expect(instructions).toContain('limits.max_commit_files');
     expect(instructions).toContain('git status --short');
   });
@@ -1118,5 +1118,29 @@ describe('assemblePrompt: what the shell credential reaches', () => {
     expect(instructions).not.toContain('`gh pr`');
     expect(instructions).toContain('Do not use it to read this forge');
     expect(instructions).toContain('already in the context above');
+  });
+});
+
+// A run that saw `?? .pnpm-store/` in `git status --short` edited `.gitignore` to hide it, and that
+// edit landed in the commit. The contract now says untracked build output is skipped for it.
+describe('assemblePrompt: the commit contract', () => {
+  const writable = makeConfig({ permissions: { write: true } });
+  const instructions = (): string =>
+    assemblePrompt({ mode: 'mention', config: writable, context, event, trigger: { mode: 'mention', explicit: true } })
+      .instructions;
+
+  it('names the repo-wide formatter commands rather than the category alone', () => {
+    expect(instructions()).toContain('`pnpm format`');
+    expect(instructions()).toContain('by passing their paths');
+  });
+
+  it('tells the agent to leave untracked build output alone, and not to edit .gitignore', () => {
+    const text = instructions();
+    expect(text).toContain('leave untracked build output alone');
+    expect(text).toContain('Do not edit `.gitignore` to hide them');
+  });
+
+  it('says a changed file is committed even when the change was accidental', () => {
+    expect(instructions()).toContain('including files you did not mean to touch');
   });
 });

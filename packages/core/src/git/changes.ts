@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FileChange } from '../forge/types.ts';
-import { debug } from '../logger.ts';
+import { debug, log } from '../logger.ts';
+import { isGeneratedCredentialFile, looksLikeCredential, SensitivePathError } from './sensitive.ts';
 
 function git(args: string[], cwd: string): string {
   return execFileSync('git', args, { cwd, encoding: 'utf-8', maxBuffer: 128 * 1024 * 1024 });
@@ -102,9 +103,20 @@ interface PendingChange {
   op: 'upsert' | 'delete';
 }
 
+/**
+ * `git status -z` reports an untracked *directory* as a single entry ending in `/` when the
+ * caller did not ask for `--untracked-files=all`. crab'd does ask for it, so this is defensive:
+ * handing such an entry to `readFileSync` raises `EISDIR` and takes down an otherwise-good commit
+ * with an error naming nothing the reader can act on.
+ */
+function isDirectoryEntry(path: string): boolean {
+  return path.endsWith('/');
+}
+
 export function collectChangesSinceBaseline(cwd: string, baseline: Baseline, options?: CollectOptions): FileChange[] {
   const out = git(['status', '--porcelain=v1', '-z', '--untracked-files=all'], cwd);
   const pending: PendingChange[] = [];
+  const sensitive: string[] = [];
 
   const touchedSinceBaseline = (path: string): boolean => {
     const before = baseline.get(path);
@@ -122,6 +134,23 @@ export function collectChangesSinceBaseline(cwd: string, baseline: Baseline, opt
       continue;
     }
 
+    if (isDirectoryEntry(path)) {
+      debug(() => `collectChangesSinceBaseline: skipping untracked directory ${path}`);
+      continue;
+    }
+
+    // Dropped whatever the baseline says. A workflow step wrote this into the checkout, and a
+    // formatter that rewrites it makes it look like the run's own work.
+    if (isGeneratedCredentialFile(path)) {
+      log(`[crabd] not committing \`${path}\`: a workflow step generated it in the checkout.`);
+      continue;
+    }
+
+    if (x === '?' && looksLikeCredential(path)) {
+      sensitive.push(path);
+      continue;
+    }
+
     if (!touchedSinceBaseline(path)) continue;
 
     // Pure deletion (in index or work tree), not also added/modified.
@@ -132,6 +161,10 @@ export function collectChangesSinceBaseline(cwd: string, baseline: Baseline, opt
 
     pending.push({ path, op: 'upsert' });
   }
+
+  // Fail closed, and before the ceiling: a credential in a commit is worse than a refused run, and
+  // the person reading the message needs the path more than they need the file count.
+  if (sensitive.length > 0) throw new SensitivePathError(sensitive);
 
   // The ceiling is checked on the path list, before a single file is read. A working tree that a
   // repo-wide formatter or a package manager has rewritten runs to five figures, and reading that
