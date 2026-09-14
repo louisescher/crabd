@@ -481,6 +481,33 @@ describe('criticalReviewReminder', () => {
   });
 });
 
+describe('assemblePrompt: mention scope and the commit contract', () => {
+  it('gives a writable mention run both the scope block and the commit contract', () => {
+    const instructions = assemble();
+    expect(instructions).toContain('The comment that triggered this run is your instruction.');
+    expect(instructions).toContain('`git` in your shell cannot change this repository.');
+  });
+
+  it('gives a review run the commit contract but not the mention scope block', () => {
+    const instructions = reviewInstructions(2);
+    expect(instructions).toContain('`git` in your shell cannot change this repository.');
+    expect(instructions).not.toContain('The comment that triggered this run is your instruction.');
+  });
+
+  it('gives a read-only run the read-only note instead of the commit contract', () => {
+    const readOnly = makeConfig({ permissions: { write: false } });
+    const instructions = assemblePrompt({
+      mode: 'mention',
+      config: readOnly,
+      context,
+      event,
+      trigger: { mode: 'mention', explicit: true },
+    }).instructions;
+    expect(instructions).toContain('You have READ-ONLY access to this repository on this run.');
+    expect(instructions).not.toContain('`git` in your shell cannot change this repository.');
+  });
+});
+
 describe('assemblePrompt — voice note', () => {
   it('appends the anti-glazing voice note to a built-in prompt', () => {
     expect(assemble()).toContain('Voice: write plainly and directly');

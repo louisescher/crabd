@@ -1,0 +1,61 @@
+#!/bin/sh
+# crab'd sandbox forge CLI: an allowlist, for the same reason the git shim is one.
+set -e
+
+REAL_CLI=/usr/bin/gh
+
+READ_ONLY_VERBS="list view status diff checks download log view-log help"
+READ_ONLY_COMMANDS="search browse status version help completion"
+
+command=""
+verb=""
+for arg in "$@"; do
+  case "$arg" in
+    -*) continue ;;
+    *)
+      if [ -z "$command" ]; then
+        command="$arg"
+      else
+        verb="$arg"
+        break
+      fi
+      ;;
+  esac
+done
+
+refuse() {
+  printf 'crabd: "%s" is not available in this sandbox. Only reads work here.\n\n' "$1" >&2
+  printf 'The forge CLI is here so you can read repositories crabd granted you. Everything\n' >&2
+  printf 'crabd writes to the forge, the commit and the comments and the review replies, goes\n' >&2
+  printf 'through the harness, which attributes it correctly and records it in the run.\n' >&2
+  printf 'Report what you found and let the harness post it.\n' >&2
+  exit 1
+}
+
+for allowed in $READ_ONLY_COMMANDS; do
+  [ "$command" = "$allowed" ] && exec "$REAL_CLI" "$@"
+done
+
+if [ "$command" = "api" ]; then
+  method_next=0
+  for arg in "$@"; do
+    case "$arg" in
+      -X | --method) method_next=1 ;;
+      -f | -F | --field | --raw-field | --input) refuse "gh api with a request body" ;;
+      --method=GET | --method=HEAD) method_next=0 ;;
+      --method=*) refuse "gh $arg" ;;
+      GET | HEAD) method_next=0 ;;
+      *)
+        [ "$method_next" = 1 ] && refuse "gh api -X $arg"
+        method_next=0
+        ;;
+    esac
+  done
+  exec "$REAL_CLI" "$@"
+fi
+
+for allowed in $READ_ONLY_VERBS; do
+  [ "$verb" = "$allowed" ] && exec "$REAL_CLI" "$@"
+done
+
+refuse "gh $command${verb:+ $verb}"

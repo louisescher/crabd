@@ -1,0 +1,45 @@
+#!/bin/sh
+# crab'd sandbox git: an allowlist of subcommands that cannot change the repository's index,
+# working tree, or branches. Steers, does not contain: /usr/bin/git is still reachable directly,
+# so what actually stops a push is stripping actions/checkout's credentials (see
+# packages/core/src/git/credentials.ts).
+set -e
+
+REAL_GIT=/usr/bin/git
+
+ALLOWED="status log show diff diff-tree diff-index whatchanged rev-parse rev-list blame cat-file ls-files ls-tree describe shortlog name-rev for-each-ref merge-base merge-tree grep check-ignore check-attr count-objects var version help clone fetch ls-remote config init"
+
+sub=""
+skip_value=0
+for arg in "$@"; do
+  if [ "$skip_value" = 1 ]; then
+    skip_value=0
+    continue
+  fi
+  case "$arg" in
+    -C | -c | --git-dir | --work-tree | --namespace | --exec-path)
+      skip_value=1
+      ;;
+    -*)
+      continue
+      ;;
+    *)
+      sub="$arg"
+      break
+      ;;
+  esac
+done
+
+for allowed in $ALLOWED; do
+  if [ "$sub" = "$allowed" ]; then
+    exec "$REAL_GIT" "$@"
+  fi
+done
+
+printf 'crabd: "git %s" is not available in this sandbox.\n\n' "$sub" >&2
+printf 'crabd commits the working tree for you. Edit the files and stop there: the harness\n' >&2
+printf 'collects what changed, scans it for secrets, and commits it to the right branch under\n' >&2
+printf 'its own identity. A commit you make here is invisible to it, and because the tree then\n' >&2
+printf 'reads clean, the work is reported as "nothing to commit" and lost.\n\n' >&2
+printf 'To bring this branch up to date with its base, call the update_branch tool.\n' >&2
+exit 1

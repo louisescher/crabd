@@ -42,6 +42,7 @@ function fakeAdapter(overrides: Partial<ForgeAdapter> = {}): ForgeAdapter {
     resolveReviewThread: vi.fn(async () => true),
     listChecks: vi.fn(async () => ({ available: true, checks: [] })),
     commitToBranch: vi.fn(async () => {}),
+    updateBranch: vi.fn(async () => ({ status: 'up-to-date' }) as const),
     openOrUpdatePR: vi.fn(async (): Promise<PullRequestRef> => ({ number: 8, url: 'http://pr/8' })),
     readOrgConfig: vi.fn(async () => undefined),
     checkRepoAccess: vi.fn(async () => 'ok' as const),

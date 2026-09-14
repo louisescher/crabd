@@ -404,7 +404,7 @@ export type ImplementPartial = v.InferOutput<typeof ImplementPartialSchema>;
 export const LimitsPartialSchema = v.object({
   /** Hard ceiling on tool-calling turns. The run is stopped if it's exceeded. */
   max_turns: v.optional(v.number()),
-  /** Hard wall-clock timeout for a run, enforced via the agent's durability. */
+  /** Hard wall-clock ceiling on a run, in minutes, shared across the whole fallback chain. 0 means no ceiling. */
   timeout_minutes: v.optional(v.number()),
 });
 export type LimitsPartial = v.InferOutput<typeof LimitsPartialSchema>;
@@ -582,6 +582,7 @@ export const DEFAULT_CONFIG: CrabdConfigPartial = {
   },
   limits: {
     max_turns: 40,
+    timeout_minutes: 20,
   },
   rate_limit: {
     // Opt-in fallback: no chain by default. Backoff governs waits between model

@@ -39,7 +39,7 @@ What to change:
 
    ```yaml
    limits:
-     max_turns: 80   # default 40
+     max_turns: 80 # default 40
    ```
 
 Raising `max_turns` trades CI minutes (and tokens) for headroom — prefer narrowing the task first.
@@ -48,14 +48,15 @@ Raising `max_turns` trades CI minutes (and tokens) for headroom — prefer narro
 
 > **crab'd** ran out of time … — the run exceeded its time limit.
 
-A wall-clock limit (`limits.timeout_minutes`) was set and the run exceeded it. Unlike the turn
-limit, this is off by default — you only see it if you configured it.
+Every run has a wall-clock ceiling (`limits.timeout_minutes`, default `20`). It's one deadline for
+the whole run: a rate-limit retry and a fallback-model switch spend the same budget rather than
+each getting a fresh one.
 
 What to change:
 
 ```yaml
 limits:
-  timeout_minutes: 20   # raise, or remove to disable
+  timeout_minutes: 30 # default 20, or 0 for no ceiling
 ```
 
 If runs routinely approach the limit, also consider narrowing the request (see above) or a faster
@@ -81,6 +82,14 @@ What to change:
 1. **Narrow the request**, or split a large PR into smaller ones.
 2. **Turn off `context.full_diff`** if it's on: a compressed diff uses far less of the budget this
    is protecting.
+
+## Run crashed or was cancelled
+
+> **crab'd** stopped unexpectedly while ... The run ended before it could finish or report a result.
+
+What to change: read the run logs first, since they're the only place detail on a crash like this
+survives. Then apply the same fix as a turn-limit or memory failure: narrow the request, or split a
+large pull request.
 
 ## Rate limited
 
@@ -149,6 +158,27 @@ Four reasons, in order of likelihood:
   request on the installation (an org owner has to approve it; raising the App's permissions alone
   does nothing until the installation accepts). Older versions surfaced this only as a 403 from
   `POST /repos/…/git/blobs` at the very end of a run.
+
+## The secret scanner could not run
+
+> `refusing to commit, the secret scanner did not finish scanning <n> files within <timeout>ms, even after a retry`
+
+crab'd scans every commit and memory write for secrets with gitleaks before it reaches the forge
+([`permissions.secret_scan`](/reference/config-yaml/#permissions), on by default), and refuses the
+write if the scan can't produce a verdict. The check is deliberately fail-closed: an unscanned
+commit never goes out.
+
+Three shapes:
+
+- **The scan timed out, even after a retry.** The message names the timeout and how many files
+  were in flight. A large change set on a loaded runner can outrun the default 120-second budget.
+  Turn the scan off on purpose with `permissions.secret_scan: false` if you'd rather not pay for
+  it, or retry the round once the runner is less busy.
+- **gitleaks is missing (`ENOENT`).** It isn't on `PATH` in the image crab'd is running in. That's
+  a crab'd packaging problem, not your config, so please [open an
+  issue](https://github.com/louisescher/crabd/issues).
+- **Anything else.** The message carries what gitleaks or the OS reported. Check the run log and,
+  if it looks like a bug in crab'd, open an issue.
 
 ## No feedback round started
 

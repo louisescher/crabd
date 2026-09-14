@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { init } from '@flue/runtime';
-import { start } from '@flue/runtime/node';
+import { sqlite, start } from '@flue/runtime/node';
 import {
   loadCrabdExtension,
   type ResolvedConfig,
@@ -14,14 +14,23 @@ import {
   finalizeRun,
   parseGitHubEvent,
   prepareRun,
+  getMode,
   registerBuiltinModes,
   registerMode,
+  checkoutPrHead,
   renderRateLimitExhausted,
   reportRunError,
+  resolveWorkspace,
+  snapshotBaseline,
+  stripCheckoutCredentials,
+  type Baseline,
   type ClassifyRequest,
   type FailureKind,
+  type ForgeAdapter,
+  type ForgeContext,
   type ForgeEvent,
   type ModeDefinition,
+  type WorkspaceState,
 } from '@crabd/core';
 import { buildClassifyMessage, CrabdClassify, type ClassifyCreation } from './agents/crabd-classify.ts';
 import { implementPhase } from '@crabd/core';
@@ -30,12 +39,14 @@ import { CrabdTurn } from './agents/crabd-turn.ts';
 import { loadResolvedConfig } from './config-loader.ts';
 import { buildForge, detectForge } from './forge-factory.ts';
 import { log, warn } from './logger.ts';
+import { saveRunState, type RunState } from './run-state.ts';
 import { buildProviders, unsizedCustomModels } from './providers.ts';
 import {
   buildRunContext,
   recordedMemories,
   runContext,
   setRunContext,
+  type BranchUpdateTarget,
   type ProgressTarget,
 } from './run-context.ts';
 import { runTurn } from './turn-runner.ts';
@@ -76,6 +87,7 @@ type CrabdTurnResult =
         /** rate_limited only. */
         attempts?: number;
         lastModel?: string;
+        providerRetries?: number;
         /** max_turns only. */
         maxTurns?: number;
         /** timeout only. */
@@ -160,8 +172,16 @@ async function runCrabdClassify(request: ClassifyRequest): Promise<{ mode: strin
  */
 async function startRuntime(config: ResolvedConfig): Promise<{ stop(): Promise<void> }> {
   const providers = buildProviders(config);
+  // flue's own default timeout is an hour, well above anything crab'd would pick, so this only tightens it.
+  const timeoutMinutes = config.limits.timeoutMinutes;
+  if (timeoutMinutes) CrabdTurn.durability = { timeoutMs: Math.round(timeoutMinutes * 60_000) + 60_000 };
+  // File-backed rather than flue's default `:memory:`, so retried attempts don't all accumulate in
+  // process memory over a long-running failover. `tmpdir()`, not `RUNNER_TEMP`: a container action
+  // cannot see the latter.
+  const db = sqlite(join(tmpdir(), `crabd-run-${process.pid}.sqlite`));
   return await start({
     agents: [CrabdTurn, CrabdClassify, CrabdRefuter],
+    db,
     ...(providers ? { providers } : {}),
   });
 }
@@ -218,6 +238,57 @@ async function registerExtensionModes(extensionPath: string | undefined, cwd: st
 let runtime: { stop(): Promise<void> } | undefined;
 /** The model the classify pass uses: the config default, before a per-mode override applies. */
 let classifyModel = 'anthropic/claude-haiku-4-5';
+
+/**
+ * The handle `update_branch` works through, or `undefined` when this run has no branch it may
+ * update. `apply` moves the checkout onto the new head and refreshes the baseline it reads, so a
+ * later commit doesn't revert the merge or trip the branch-moved guard.
+ */
+function buildBranchUpdate(input: {
+  adapter: ForgeAdapter;
+  config: ResolvedConfig;
+  context: ForgeContext;
+  plan: { baseline: Baseline; subject: number; mode: string; workspace?: WorkspaceState };
+  cwd: string;
+  forgeToken: string | undefined;
+  forge: string;
+}): BranchUpdateTarget | undefined {
+  const { adapter, config, context, plan, cwd, forgeToken, forge } = input;
+  const pr = context.pullRequest;
+  if (!pr || pr.fromFork || !config.permissions.write) return undefined;
+  // A review does not touch the branch, and a merge commit appearing under one would be a
+  // surprising thing for asking to be reviewed.
+  if (getMode(plan.mode)?.writes === undefined) return undefined;
+
+  // Checkout credentials were stripped already, so the fetch after an update needs the token directly.
+  const gitEnv = forgeToken
+    ? gitCredentialEnv(forge, forgeHost(process.env.GITHUB_SERVER_URL), forgeToken)
+    : undefined;
+
+  return {
+    adapter,
+    prNumber: pr.number,
+    cwd,
+    headSha: () => pr.headSha,
+    baseline: () => plan.baseline,
+    apply(headSha: string): boolean {
+      if (!checkoutPrHead(cwd, headSha, plan.subject, gitEnv)) return false;
+      plan.baseline = snapshotBaseline(cwd);
+      plan.workspace = resolveWorkspace(cwd, headSha);
+      pr.headSha = headSha;
+      return true;
+    },
+  };
+}
+
+/** How long a dying run may spend trying to update its comment before it gives up and exits. */
+const FATAL_REPORT_TIMEOUT_MS = 3_000;
+
+/**
+ * Set once the run has a tracking comment to post to. Module-scoped because the process-level
+ * handlers below have no other way to reach it, and one process serves one run.
+ */
+let fatalReporter: ((detail: string) => Promise<void>) | undefined;
 
 async function main(): Promise<number> {
   registerBuiltinModes();
@@ -297,12 +368,16 @@ async function main(): Promise<number> {
   classifyModel = config.model;
   runtime = await startRuntime(config);
 
+  // Computed up front so a comment posted from a catch block still carries the run link.
+  const runUrl = runUrlFromEnv();
+
   const outcome = await prepareRun({
     adapter,
     config,
     event,
     cwd,
     advisories,
+    ...(runUrl ? { runUrl } : {}),
     classify: async (req) => runCrabdClassify(req),
   });
   if (outcome.status === 'skip') {
@@ -316,7 +391,30 @@ async function main(): Promise<number> {
 
   const { plan, context, trigger } = outcome;
   log(`mode=${plan.mode} model=${plan.model} subject=#${plan.subject}`);
-  const runUrl = runUrlFromEnv();
+
+  // Covers the ways out of this function that are not a return: a cancel, or a heap crash.
+  const runState: RunState = {
+    version: 1,
+    forge,
+    repo: event.repo,
+    tracking: { id: plan.tracking.id, target: plan.tracking.target },
+    subject: plan.subject,
+    mode: plan.verbKey ?? plan.mode,
+    branding: plan.branding,
+    ...(config.triggerPhrase ? { triggerPhrase: config.triggerPhrase } : {}),
+    finalized: false,
+  };
+  saveRunState(runState);
+  const finalized = (): void => saveRunState({ ...runState, finalized: true });
+
+  fatalReporter = async (detail) => {
+    await reportRunError(adapter, plan, {
+      kind: 'crashed',
+      detail,
+      ...(config.triggerPhrase ? { triggerPhrase: config.triggerPhrase } : {}),
+    });
+    finalized();
+  };
 
   // A checkout that isn't the PR head means the agent reads the wrong version of every file it
   // opens. prepareRun already tried to correct it and told the model; make it loud in CI too,
@@ -363,9 +461,16 @@ async function main(): Promise<number> {
   // The mode's instructions, which the npmrc advisory below may append to.
   let turnInstructions = plan.instructions;
 
+  // Take away the checkout's write credentials now that prepareRun is done with the fetches that needed them.
+  stripCheckoutCredentials(cwd);
+
   // --- Sandbox access: cross-repo read token, forwarded secrets, private-registry .npmrc ---
   // All opt-in via config. Anything placed here is visible to the model's (network-capable) shell.
   const sandboxEnv: Record<string, string> = {};
+
+  const sandboxBin = process.env.CRABD_SANDBOX_BIN;
+  if (sandboxBin) sandboxEnv.PATH = `${sandboxBin}:${process.env.PATH ?? ''}`;
+  else log('sandbox git guard is not installed (CRABD_SANDBOX_BIN is unset), the shell can run git directly');
 
   // (a) Forward allowlisted env vars (values come from CI secrets mapped onto the crab'd step).
   for (const name of config.sandbox.env) {
@@ -398,8 +503,8 @@ async function main(): Promise<number> {
         kind: 'config',
         detail: `\`repos.read\` lists ${denied.map((d) => `\`${d}\``).join(', ')}, but ${who} cannot access ${plural ? 'them' : 'it'}. Either ${fix}, or remove ${plural ? 'them' : 'it'} from \`repos.read\`.`,
         ...(config.triggerPhrase ? { triggerPhrase: config.triggerPhrase } : {}),
-        ...(runUrl ? { runUrl } : {}),
       });
+      finalized();
       return 1;
     }
   }
@@ -419,6 +524,9 @@ async function main(): Promise<number> {
         });
       } else if (strategy === 'static') {
         token = await auth.getToken(); // scope is whatever the supplied token already has
+        warn(
+          `repos.read with a static token exposes that token to the model's shell with whatever scope it already has. Use a GitHub App (\`app-id\`/\`app-private-key\`) so crab'd can mint a read-only token instead.`,
+        );
       }
       if (token) {
         sandboxEnv.GH_TOKEN = token;
@@ -461,6 +569,8 @@ async function main(): Promise<number> {
     if (advisory) turnInstructions = `${turnInstructions}\n\n${advisory}`.trim();
   }
 
+  const branchUpdate = buildBranchUpdate({ adapter, config, context, plan, cwd, forgeToken, forge });
+
   // Everything the agents and the runner read about this run, in one place. The `CRABD_*` vars this
   // replaces existed only because the turn was a subprocess.
   setRunContext(
@@ -474,6 +584,7 @@ async function main(): Promise<number> {
       repoSlug: event.repo.slug,
       ...(diffPath ? { diffPath } : {}),
       ...(progress ? { progress } : {}),
+      ...(branchUpdate ? { branchUpdate } : {}),
       memory: plan.memory,
       today: new Date().toISOString().slice(0, 10),
       branding: plan.branding,
@@ -509,8 +620,8 @@ async function main(): Promise<number> {
       kind: 'error',
       ...(detail ? { detail } : {}),
       ...(config.triggerPhrase ? { triggerPhrase: config.triggerPhrase } : {}),
-      ...(runUrl ? { runUrl } : {}),
     });
+    finalized();
     return 1;
   }
 
@@ -526,10 +637,12 @@ async function main(): Promise<number> {
           mode: plan.verbKey,
           attempts: turn.error.attempts ?? 0,
           ...(turn.error.lastModel ? { lastModel: turn.error.lastModel } : {}),
+          ...(turn.error.providerRetries ? { providerRetries: turn.error.providerRetries } : {}),
           soft,
           triggerPhrase: config.triggerPhrase,
         }),
       );
+      finalized();
       return soft ? 0 : 1;
     }
 
@@ -542,8 +655,8 @@ async function main(): Promise<number> {
       ...(turn.error.maxTurns ? { maxTurns: turn.error.maxTurns } : {}),
       ...(turn.error.timeoutMinutes ? { timeoutMinutes: turn.error.timeoutMinutes } : {}),
       ...(config.triggerPhrase ? { triggerPhrase: config.triggerPhrase } : {}),
-      ...(runUrl ? { runUrl } : {}),
     });
+    finalized();
     return 1;
   }
 
@@ -570,12 +683,37 @@ async function main(): Promise<number> {
     ...(note ? { note } : {}),
   });
 
+  finalized();
   setOutput('mode', plan.mode);
   setOutput('result', JSON.stringify(data));
   setOutput('summary', result.summary);
   log('done.');
   return 0;
 }
+
+/**
+ * Report a run that is about to die, then leave. Bounded, since the runner SIGKILLs a few seconds
+ * after SIGTERM. Re-entrant calls are ignored so two signals cannot post twice.
+ */
+let reportingFatal = false;
+async function onFatal(error: unknown): Promise<void> {
+  if (reportingFatal) return;
+  reportingFatal = true;
+  log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+  if (fatalReporter) {
+    const detail = error instanceof Error ? error.message : String(error);
+    await Promise.race([
+      fatalReporter(detail).catch(() => {}),
+      new Promise((resolve) => setTimeout(resolve, FATAL_REPORT_TIMEOUT_MS)),
+    ]);
+  }
+  process.exit(1);
+}
+
+process.on('uncaughtException', (error) => void onFatal(error));
+process.on('unhandledRejection', (reason) => void onFatal(reason));
+process.on('SIGTERM', () => void onFatal(new Error('the job was cancelled or timed out (SIGTERM)')));
+process.on('SIGINT', () => void onFatal(new Error('the run was interrupted (SIGINT)')));
 
 main()
   .finally(async () => {
@@ -584,7 +722,4 @@ main()
     await runtime?.stop().catch(() => {});
   })
   .then((code) => process.exit(code))
-  .catch((error) => {
-    log(`fatal: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
-    process.exit(1);
-  });
+  .catch((error) => void onFatal(error));

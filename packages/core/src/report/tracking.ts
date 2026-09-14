@@ -22,6 +22,12 @@ export const PR_MARKER = '<!-- crabd:pr -->';
 
 export const REPLY_MARKER = '<!-- crabd:reply -->';
 
+/**
+ * Hidden marker on every non-terminal tracking-comment state, so the action's post step can tell
+ * whether a run ever reported an outcome without racing a flag saved from inside the process.
+ */
+export const RUNNING_MARKER = '<!-- crabd:running -->';
+
 export const CRABD_MARKERS = [TRACKING_MARKER, FINDING_MARKER, MEMORY_MARKER, PR_MARKER, REPLY_MARKER];
 
 export function isCrabdAuthored(body: string | undefined): boolean {
@@ -80,6 +86,8 @@ export interface CommentContext extends Branding {
   handledCommentId?: number;
   handledKind?: HandledKind;
   roundClaim?: { headSha: string; feedbackToken: string };
+  /** Link to the CI run, rendered on every state. */
+  runUrl?: string;
 }
 
 /** The emoji prefix (`🦀 `) for a comment lead, or `''` when no emoji is configured. */
@@ -106,13 +114,14 @@ function advisoryBlock(b: CommentContext): string {
  * omitted when `branding.footer` is false. Any {@link CommentContext.advisories} are rendered
  * immediately above it, so every renderer picks them up from its single existing `footer(...)` call.
  */
-function footer(b: CommentContext): string {
+function footer(b: CommentContext, running = false): string {
   const advisory = advisoryBlock(b);
   const handled = b.handledCommentId !== undefined ? `\n${handledMarker(b.handledCommentId, b.handledKind)}` : '';
   const round = b.roundClaim ? `\n${roundMarker(b.roundClaim.headSha, b.roundClaim.feedbackToken)}` : '';
-  const markers = `${TRACKING_MARKER}${handled}${round}`;
-  if (!b.footer) return `${advisory}\n${markers}`;
-  return `${advisory}\n\n<sub>${prefix(b)}posted by [${b.name}](https://github.com/louisescher/crabd)</sub>\n${markers}`;
+  const markers = `${running ? `${RUNNING_MARKER}\n` : ''}${TRACKING_MARKER}${handled}${round}`;
+  const link = b.runUrl ? `\n\n<sub>[run logs](${b.runUrl})</sub>` : '';
+  if (!b.footer) return `${advisory}${link}\n${markers}`;
+  return `${advisory}${link}\n\n<sub>${prefix(b)}posted by [${b.name}](https://github.com/louisescher/crabd)</sub>\n${markers}`;
 }
 
 const MODE_VERB: Record<string, string> = {
@@ -123,16 +132,15 @@ const MODE_VERB: Record<string, string> = {
 };
 
 /** The initial "in progress" tracking comment body. */
-export function renderWorking(branding: CommentContext, mode: string, runUrl?: string): string {
+export function renderWorking(branding: CommentContext, mode: string): string {
   const verb = MODE_VERB[mode] ?? 'working';
-  const link = runUrl ? ` ([logs](${runUrl}))` : '';
-  return `${prefix(branding)}**${branding.name}** is ${verb}...${link}${footer(branding)}`;
+  return `${prefix(branding)}**${branding.name}** is ${verb}...${footer(branding, true)}`;
 }
 
 /** A live progress update posted mid-run by the agent's progress tool. */
 export function renderProgress(branding: CommentContext, mode: string, message: string): string {
   const verb = MODE_VERB[mode] ?? 'working';
-  return `${prefix(branding)}**${branding.name}** is ${verb}...\n\n${message.trim()}${footer(branding)}`;
+  return `${prefix(branding)}**${branding.name}** is ${verb}...\n\n${message.trim()}${footer(branding, true)}`;
 }
 
 export interface RateLimitedRender {
@@ -164,7 +172,7 @@ export function renderRateLimited(branding: CommentContext, render: RateLimitedR
         ? ` retrying with \`${render.nextModel}\``
         : ' retrying';
   const attempt = render.attempt ? ` (attempt ${render.attempt})` : '';
-  return `${prefix(branding)}**${branding.name}** hit a rate limit${provider} while ${verb} —${wait}${target}${attempt}…${footer(branding)}`;
+  return `${prefix(branding)}**${branding.name}** hit a rate limit${provider} while ${verb}:${wait}${target}${attempt}...${footer(branding, true)}`;
 }
 
 export interface RateLimitExhaustedRender {
@@ -173,6 +181,8 @@ export interface RateLimitExhaustedRender {
   attempts: number;
   /** The last model tried, if known. */
   lastModel?: string;
+  /** Same-model retries the provider layer made underneath those attempts, when there were any. */
+  providerRetries?: number;
   /** True = crab'd finished the run green (soft); false = it failed the check. */
   soft: boolean;
   /** Trigger phrase to suggest for a manual retry (e.g. `/crabd`). */
@@ -184,14 +194,17 @@ export function renderRateLimitExhausted(branding: CommentContext, render: RateL
   const verb = MODE_VERB[render.mode] ?? 'working';
   const last = render.lastModel ? ` (last tried \`${render.lastModel}\`)` : '';
   const plural = render.attempts === 1 ? '' : 's';
+  const retries = render.providerRetries
+    ? `, and ${render.providerRetries} provider retr${render.providerRetries === 1 ? 'y' : 'ies'} underneath them`
+    : '';
   const modeKeyword = render.mode === 'mention' ? '' : ` ${render.mode}`;
   const retry = render.triggerPhrase
     ? ` Comment \`${render.triggerPhrase}${modeKeyword}\` to try again once the limits ease.`
     : ' Try again once the rate limits ease.';
   // Status glyphs (⏳/⚠️) mark the outcome and are intentionally not part of brand emoji.
   const lead = render.soft
-    ? `⏳ **${branding.name}** couldn't finish ${verb} — every model was rate-limited after ${render.attempts} attempt${plural}${last}.`
-    : `⚠️ **${branding.name}** failed while ${verb} — every model was rate-limited after ${render.attempts} attempt${plural}${last}.`;
+    ? `⏳ **${branding.name}** couldn't finish ${verb}: every model was rate-limited after ${render.attempts} attempt${plural}${retries}${last}.`
+    : `⚠️ **${branding.name}** failed while ${verb}: every model was rate-limited after ${render.attempts} attempt${plural}${retries}${last}.`;
   return `${lead}${retry}${footer(branding)}`;
 }
 
@@ -199,7 +212,6 @@ export interface ResultRender {
   mode: string;
   summary: string;
   prUrl?: string;
-  runUrl?: string;
   /** Optional disclosure line appended as a <sub> note (e.g. a fallback model was used). */
   note?: string;
 }
@@ -209,7 +221,6 @@ export function renderResult(branding: CommentContext, render: ResultRender): st
   const parts = [render.summary.trim()];
   if (render.prUrl) parts.push(`\n➡️ Opened pull request: ${render.prUrl}`);
   if (render.note) parts.push(`\n<sub>${render.note}</sub>`);
-  if (render.runUrl) parts.push(`\n<sub>[run logs](${render.runUrl})</sub>`);
   return parts.join('\n') + footer(branding);
 }
 
@@ -224,7 +235,14 @@ export function renderMemoryNote(note: string): string {
 }
 
 /** The classes of terminal failure crab'd can post a tailored, actionable comment for. */
-export type FailureKind = 'max_turns' | 'timeout' | 'resource_exhausted' | 'config' | 'network' | 'error';
+export type FailureKind =
+  | 'max_turns'
+  | 'timeout'
+  | 'resource_exhausted'
+  | 'config'
+  | 'network'
+  | 'crashed'
+  | 'error';
 
 export interface FailureRender {
   mode: string;
@@ -238,15 +256,13 @@ export interface FailureRender {
   timeoutMinutes?: number;
   /** Trigger phrase to suggest for a manual retry (e.g. `/crabd`). */
   triggerPhrase?: string;
-  /** Link to the run logs, appended as a footer note. */
-  runUrl?: string;
 }
 
 /** Render the underlying error as a collapsed, length-capped detail block (empty when none). */
 function detailBlock(detail: string | undefined): string {
   const clean = detail?.trim();
   if (!clean) return '';
-  const shown = clean.length > 600 ? `${clean.slice(0, 600)}\n… [truncated]` : clean;
+  const shown = clean.length > 600 ? `${clean.slice(0, 600)}\n... [truncated]` : clean;
   return `\n\n<details><summary>Error details</summary>\n\n\`\`\`\n${shown}\n\`\`\`\n\n</details>`;
 }
 
@@ -283,6 +299,12 @@ export function renderFailure(branding: CommentContext, render: FailureRender): 
       docs = `[Troubleshooting → run ran out of memory](${DOCS_BASE}/troubleshooting/#run-ran-out-of-memory)`;
       break;
     }
+    case 'crashed': {
+      lead = `⚠️ **${name}** stopped unexpectedly while ${verb}.`;
+      tip = `The run ended before it could finish or report a result. That is usually the job being cancelled, or ${name} running out of memory on an unusually large input. **What to change:** read the run logs below, then narrow the request or split a large pull request.`;
+      docs = `[Troubleshooting](${DOCS_BASE}/troubleshooting/)`;
+      break;
+    }
     case 'config': {
       lead = `⚠️ **${name}** couldn't start ${verb} — its configuration is invalid.`;
       tip = `**What to change:** check your \`.crabd.yml\` / \`crabd.config.ts\` against the reference and fix the reported field.`;
@@ -305,9 +327,8 @@ export function renderFailure(branding: CommentContext, render: FailureRender): 
   const retry = render.triggerPhrase
     ? `Once you've adjusted things, comment \`${render.triggerPhrase}\` to try again.`
     : undefined;
-  const runLog = render.runUrl ? `\n<sub>[run logs](${render.runUrl})</sub>` : '';
   const parts = [lead, tip, ...(retry ? [retry] : []), `📖 ${docs}`];
-  return parts.join('\n\n') + detailBlock(render.detail) + runLog + footer(branding);
+  return parts.join('\n\n') + detailBlock(render.detail) + footer(branding);
 }
 
 /** The tracking comment body when the run fails. Thin wrapper over {@link renderFailure}. */

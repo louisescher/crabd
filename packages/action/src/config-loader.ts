@@ -8,6 +8,7 @@ import {
   type ResolvedConfig,
 } from '@crabd/config';
 import type { ForgeAdapter, ForgeEvent } from '@crabd/core';
+import { log } from './logger.ts';
 
 export interface LoadedConfig {
   config: ResolvedConfig;
@@ -38,10 +39,82 @@ function inputsPartial(env: NodeJS.ProcessEnv): CrabdConfigPartial | undefined {
   return parseConfigObject(raw);
 }
 
+/** Whether the checkout could be a pull request head rather than the repository's default branch. */
+function checkoutMayBeUntrusted(event: ForgeEvent): boolean {
+  const onPullRequest = event.pullRequest !== undefined || event.isPullRequest === true;
+  if (!onPullRequest) return false;
+  const headRef = event.pullRequest?.headRef;
+  return headRef === undefined || headRef !== event.repo.defaultBranch;
+}
+
+/**
+ * Split a partial into the sections only the default branch may set (`permissions`, `governance`,
+ * and `prompt.override`, which grants the same authority by another route) and everything else.
+ */
+function splitTrustedSections(partial: CrabdConfigPartial): {
+  trusted?: CrabdConfigPartial;
+  rest: CrabdConfigPartial;
+} {
+  const { permissions, governance, prompt, ...others } = partial;
+  const { override, allow_full_override, ...promptRest } = prompt ?? {};
+  const trustedPrompt =
+    override !== undefined || allow_full_override !== undefined
+      ? {
+          ...(override !== undefined ? { override } : {}),
+          ...(allow_full_override !== undefined ? { allow_full_override } : {}),
+        }
+      : undefined;
+
+  const rest: CrabdConfigPartial = {
+    ...others,
+    ...(Object.keys(promptRest).length > 0 ? { prompt: promptRest } : {}),
+  };
+  if (!permissions && !governance && !trustedPrompt) return { rest };
+  return {
+    trusted: {
+      ...(permissions ? { permissions } : {}),
+      ...(governance ? { governance } : {}),
+      ...(trustedPrompt ? { prompt: trustedPrompt } : {}),
+    },
+    rest,
+  };
+}
+
+/**
+ * `permissions.*` / `governance.*` for a pull request run, read from the repository's default
+ * branch instead of the checkout so a PR cannot grant itself permissions it is then reviewed
+ * under. Call only when {@link checkoutMayBeUntrusted} is true.
+ */
+async function loadRepoTrustedLayer(
+  adapter: ForgeAdapter,
+  event: ForgeEvent,
+  configPathRel: string,
+): Promise<CrabdConfigPartial | undefined> {
+  const source = await adapter.readOrgConfig(event.repo.slug, configPathRel);
+  if (!source) {
+    log(`no default-branch ${configPathRel} found for ${event.repo.slug}; the trusted sections fall through to the org and default layers for this pull request run.`);
+    return undefined;
+  }
+
+  let parsed: CrabdConfigPartial;
+  try {
+    parsed = parseConfigYaml(source);
+  } catch (error) {
+    log(
+      `default-branch ${configPathRel} could not be parsed, ignoring it for the trusted sections: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return undefined;
+  }
+
+  const { trusted } = splitTrustedSections(parsed);
+  return trusted;
+}
+
 /**
  * Resolve the layered config for this run:
- * built-in defaults → org config repo → repo `.crabd.yml` → CI inputs → env,
- * with org-locked keys and full-override gating handled by {@link resolveConfig}.
+ * built-in defaults → org config repo → repo `.crabd.yml` → repo default branch (the sections a
+ * pull request may not set for itself) → CI inputs → env, with org-locked keys and full-override
+ * gating handled by {@link resolveConfig}.
  */
 export async function loadResolvedConfig(input: {
   adapter: ForgeAdapter;
@@ -58,9 +131,15 @@ export async function loadResolvedConfig(input: {
   const orgSource = await adapter.readOrgConfig(orgRepoSlug, orgConfigPath);
   const org = orgSource ? parseConfigYaml(orgSource) : undefined;
 
-  // Repo layer: the checked-out repo's `.crabd.yml`.
-  const repoConfigFile = join(cwd, env.CRABD_CONFIG_PATH ?? '.crabd.yml');
-  const repo = existsSync(repoConfigFile) ? parseConfigYaml(readFileSync(repoConfigFile, 'utf-8')) : undefined;
+  // Repo layer: the checked-out repo's `.crabd.yml`. On an untrusted checkout, `permissions.*` /
+  // `governance.*` are stripped here and read from the default branch instead, below.
+  const repoConfigPathRel = env.CRABD_CONFIG_PATH ?? '.crabd.yml';
+  const repoConfigFile = join(cwd, repoConfigPathRel);
+  const repoFull = existsSync(repoConfigFile) ? parseConfigYaml(readFileSync(repoConfigFile, 'utf-8')) : undefined;
+
+  const untrustedCheckout = checkoutMayBeUntrusted(event);
+  const repo = untrustedCheckout && repoFull ? splitTrustedSections(repoFull).rest : repoFull;
+  const repoTrusted = untrustedCheckout ? await loadRepoTrustedLayer(adapter, event, repoConfigPathRel) : undefined;
 
   // Inputs layer: friendly action inputs. Env layer: an advanced YAML override blob.
   const inputs = inputsPartial(env);
@@ -70,6 +149,7 @@ export async function loadResolvedConfig(input: {
     repoSlug: event.repo.slug,
     layers: {
       ...(org ? { org } : {}),
+      ...(repoTrusted ? { repoTrusted } : {}),
       ...(repo ? { repo } : {}),
       ...(inputs ? { inputs } : {}),
       ...(envLayer ? { env: envLayer } : {}),

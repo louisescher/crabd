@@ -3,8 +3,10 @@ import { join } from 'node:path';
 import { defineTool, type McpConnectionDefinition, type ToolDefinition } from '@flue/runtime';
 import * as v from 'valibot';
 import {
+  collectChangesSinceBaseline,
   renderProgress,
   writeMemory,
+  type Baseline,
   type CommentContext,
   type ForgeAdapter,
   type RunMemory,
@@ -13,6 +15,20 @@ import {
 import type { ResolvedConfig, ResolvedMcpServer, ResolvedReviewVerify, ThinkingLevel } from '@crabd/config';
 import { log } from './logger.ts';
 import { webSearchTools } from './tools/websearch.ts';
+
+/**
+ * What `update_branch` needs to merge a pull request's base into its head and move this run onto
+ * the result. The getters read the CLI's own plan objects, which `finalizeRun` reads too.
+ */
+export interface BranchUpdateTarget {
+  adapter: ForgeAdapter;
+  prNumber: number;
+  cwd: string;
+  headSha(): string;
+  baseline(): Baseline;
+  /** Checks the workspace out onto `headSha` and re-points the pull request. False if it could not move. */
+  apply(headSha: string): boolean;
+}
 
 /** Where the agent posts progress, when the run has a tracking comment to post to. */
 export interface ProgressTarget {
@@ -61,6 +77,8 @@ export interface RunContext {
   /** Where the CLI wrote the diff, when the mode has one. */
   diffPath?: string;
   progress?: ProgressTarget;
+  /** Present only on a pull request crab'd can write to; absent means `update_branch` is not mounted. */
+  branchUpdate?: BranchUpdateTarget;
   /**
    * Whether this run may record a memory, and where they live. Resolved before the turn starts so
    * the tool is simply absent when crab'd could not commit the result — see `RunMemory`.
@@ -99,6 +117,7 @@ export function buildRunContext(input: {
   repoSlug?: string;
   diffPath?: string;
   progress?: ProgressTarget;
+  branchUpdate?: BranchUpdateTarget;
   memory?: RunMemory;
   today?: string;
   /** The plan's branding, carrying any advisories. Falls back to plain `config.appearance`. */
@@ -124,6 +143,7 @@ export function buildRunContext(input: {
     ...(input.repoSlug ? { repoSlug: input.repoSlug } : {}),
     ...(input.diffPath ? { diffPath: input.diffPath } : {}),
     ...(input.progress ? { progress: input.progress } : {}),
+    ...(input.branchUpdate ? { branchUpdate: input.branchUpdate } : {}),
     ...(input.memory ? { memory: input.memory } : {}),
     ...(input.today ? { today: input.today } : {}),
   };
@@ -231,6 +251,86 @@ export function rememberTool(): ToolDefinition | undefined {
         log(`remember: failed to record "${data.name}": ${message}`);
         return { output: { error: message } };
       }
+    },
+  });
+}
+
+/**
+ * The tool that answers "update this branch" and "fix the merge conflicts". The merge happens on
+ * the forge under crab'd's identity, and the run's checkout moves onto the result so a later
+ * commit builds on the merged tree instead of reverting it.
+ */
+export function updateBranchTool(): ToolDefinition | undefined {
+  const { branchUpdate } = runContext();
+  if (!branchUpdate) return undefined;
+
+  return defineTool({
+    name: 'update_branch',
+    description: [
+      "Merge this pull request's base branch into its head branch, on the forge, and move your",
+      'checkout onto the result.',
+      '',
+      'This is the only way to bring the branch up to date or to deal with it being behind its base.',
+      'You cannot merge or rebase yourself.',
+      '',
+      'Call it BEFORE you edit anything: it refuses once you have changed a file, because moving the',
+      'checkout would discard that change. If it reports a conflict, the merge needs a human. Say so in your',
+      'answer and stop rather than trying to work around it.',
+    ].join('\n'),
+    input: v.object({
+      reason: v.pipe(
+        v.string(),
+        v.description('One line on why the branch needs updating, for the run log.'),
+      ),
+    }),
+    async run({ data }) {
+      const pending = collectChangesSinceBaseline(branchUpdate.cwd, branchUpdate.baseline());
+      if (pending.length > 0) {
+        return {
+          output: {
+            status: 'refused',
+            message: `You have already changed ${pending.length} file(s). Updating the branch would move the checkout out from under them. Finish and submit this run, then ask for the update in a new one.`,
+          },
+        };
+      }
+
+      log(`update_branch: ${data.reason}`);
+      let update;
+      try {
+        update = await branchUpdate.adapter.updateBranch(branchUpdate.prNumber, {
+          expectedHeadSha: branchUpdate.headSha(),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        log(`update_branch: failed: ${message}`);
+        return { output: { status: 'error', message } };
+      }
+
+      if (update.status !== 'updated') {
+        log(`update_branch: ${update.status}`);
+        return { output: update };
+      }
+
+      if (!branchUpdate.apply(update.headSha)) {
+        return {
+          output: {
+            status: 'desynced',
+            head_sha: update.headSha,
+            message:
+              'The branch was updated on the forge, but your checkout could not be moved onto the new head. Anything you commit from here would revert the merge, so nothing more will be committed on this run. Report that the branch is now up to date and stop.',
+          },
+        };
+      }
+
+      log(`update_branch: moved onto ${update.headSha}`);
+      return {
+        output: {
+          status: 'updated',
+          head_sha: update.headSha,
+          message:
+            'Your checkout is now on the merged head. The diff and review threads in your context were captured before the merge, so re-read any file before you change it.',
+        },
+      };
     },
   });
 }

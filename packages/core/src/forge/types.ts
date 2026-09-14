@@ -61,6 +61,13 @@ export interface ForgePullRequest extends ForgeIssue {
   isDraft: boolean;
 }
 
+/** Outcome of merging a pull request's base into its head. `updated` carries the new head sha. */
+export type BranchUpdate =
+  | { status: 'updated'; headSha: string }
+  | { status: 'up-to-date' }
+  | { status: 'conflict'; message: string }
+  | { status: 'unsupported'; message: string };
+
 /** A changed file in a pull request. */
 export interface ForgeChangedFile {
   path: string;
@@ -265,6 +272,9 @@ export interface ForgeAdapter {
 
   /** Commit file changes to a branch, creating it from `baseBranch` if needed. */
   commitToBranch(request: CommitRequest): Promise<void>;
+
+  /** Merge a pull request's base branch into its head branch, server-side, under crab'd's identity. */
+  updateBranch(prNumber: number, options?: { expectedHeadSha?: string }): Promise<BranchUpdate>;
 
   /** Open a PR, or update the existing one for the same head branch. */
   openOrUpdatePR(request: OpenPrRequest): Promise<PullRequestRef>;

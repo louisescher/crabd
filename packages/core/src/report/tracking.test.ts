@@ -6,9 +6,11 @@ import {
   renderFailure,
   renderMemoryNote,
   renderProgress,
+  renderRateLimited,
   renderRateLimitExhausted,
   renderResult,
   renderWorking,
+  RUNNING_MARKER,
   isCommentHandled,
   isCrabdAuthored,
   isRoundHandled,
@@ -117,13 +119,41 @@ describe('renderFailure — helpful, kind-aware errors', () => {
     expect(short).toContain('boom');
 
     const long = renderFailure(custom, { mode: 'mention', kind: 'error', detail: 'x'.repeat(2000) });
-    expect(long).toContain('… [truncated]');
+    expect(long).toContain('... [truncated]');
     expect(long.length).toBeLessThan(2000);
   });
 
-  it('appends a run-logs link when provided', () => {
-    const body = renderFailure(custom, { mode: 'mention', kind: 'error', runUrl: 'https://ci/run/1' });
+  it('appends a run-logs link when the branding carries one', () => {
+    const body = renderFailure({ ...custom, runUrl: 'https://ci/run/1' }, { mode: 'mention', kind: 'error' });
     expect(body).toContain('[run logs](https://ci/run/1)');
+  });
+
+  it('renders the run-logs link on every state, terminal or not', () => {
+    const branded = { ...custom, runUrl: 'https://ci/run/1' };
+    for (const body of [
+      renderWorking(branded, 'mention'),
+      renderProgress(branded, 'mention', 'looking'),
+      renderRateLimited(branded, { mode: 'mention' }),
+      renderResult(branded, { mode: 'mention', summary: 'done' }),
+      renderFailure(branded, { mode: 'mention', kind: 'crashed' }),
+    ]) {
+      expect(body).toContain('[run logs](https://ci/run/1)');
+    }
+  });
+
+  it('marks only the non-terminal states as still running', () => {
+    expect(renderWorking(custom, 'mention')).toContain(RUNNING_MARKER);
+    expect(renderProgress(custom, 'mention', 'looking')).toContain(RUNNING_MARKER);
+    expect(renderRateLimited(custom, { mode: 'mention' })).toContain(RUNNING_MARKER);
+    expect(renderResult(custom, { mode: 'mention', summary: 'done' })).not.toContain(RUNNING_MARKER);
+    expect(renderFailure(custom, { mode: 'mention', kind: 'crashed' })).not.toContain(RUNNING_MARKER);
+    expect(renderRateLimitExhausted(custom, { mode: 'mention', attempts: 2, soft: false })).not.toContain(RUNNING_MARKER);
+  });
+
+  it('names the crash in a crashed failure', () => {
+    const body = renderFailure(custom, { mode: 'mention', kind: 'crashed' });
+    expect(body).toContain('stopped unexpectedly');
+    expect(body).toContain('running out of memory');
   });
 
   it('renderError delegates to a generic failure (backward compatible)', () => {

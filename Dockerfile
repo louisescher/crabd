@@ -42,6 +42,11 @@ COPY packages/config ./packages/config
 COPY packages/core ./packages/core
 COPY packages/action ./packages/action
 RUN pnpm --filter @crabd/config --filter @crabd/core --filter @crabd/action build \
-  && chmod +x /app/packages/action/docker-entrypoint.sh
+  && chmod +x /app/packages/action/docker-entrypoint.sh /app/packages/action/docker-post.sh \
+  && chmod +x /app/packages/action/sandbox-bin/*
+
+# Only the sandbox's PATH points here, so these wrappers intercept the model's git and gh calls
+# without affecting crab'd's own.
+ENV CRABD_SANDBOX_BIN=/app/packages/action/sandbox-bin
 
 ENTRYPOINT ["/app/packages/action/docker-entrypoint.sh"]

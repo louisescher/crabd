@@ -152,8 +152,14 @@ export interface ConfigLayers {
   defaults?: CrabdConfigPartial;
   /** From the org config repo — may carry `governance`. */
   org?: CrabdConfigPartial;
-  /** The target repo's `.crabd.yml`. */
+  /** The target repo's `.crabd.yml`, read from the checkout (the PR head, on a pull request). */
   repo?: CrabdConfigPartial;
+  /**
+   * `permissions.*` and `governance.*` read from the repo's default branch instead of the
+   * checkout, so a pull request cannot use its own head to relax the permissions it is checked
+   * against.
+   */
+  repoTrusted?: CrabdConfigPartial;
   /** CI action inputs mapped to a partial. */
   inputs?: CrabdConfigPartial;
   /** Env-var overrides mapped to a partial. */
@@ -174,7 +180,7 @@ interface NamedLayer {
 const ORG_OR_BELOW: ReadonlySet<keyof ConfigLayers> = new Set(['defaults', 'org']);
 
 function orderedLayers(layers: ConfigLayers): NamedLayer[] {
-  const order: (keyof ConfigLayers)[] = ['defaults', 'org', 'repo', 'inputs', 'env'];
+  const order: (keyof ConfigLayers)[] = ['defaults', 'org', 'repo', 'repoTrusted', 'inputs', 'env'];
   const out: NamedLayer[] = [];
   for (const name of order) {
     const config = layers[name];
@@ -291,7 +297,8 @@ function requireDefined<T>(value: T | undefined, path: string): T {
 export function resolveConfig(options: ResolveOptions): ResolvedConfig {
   const layers = orderedLayers({ ...options.layers, defaults: options.layers.defaults ?? DEFAULT_CONFIG });
   const orgLayer = layers.find((l) => l.name === 'org')?.config;
-  const repoLayer = layers.find((l) => l.name === 'repo')?.config;
+  // `repoTrusted` first: a pull request head must not be able to replace the system prompt of the run reviewing it.
+  const repoLayer = layers.find((l) => l.name === 'repoTrusted')?.config ?? layers.find((l) => l.name === 'repo')?.config;
   const locked = new Set(orgLayer?.governance?.locked ?? []);
 
   const model = requireDefined(pickScalar('model', (c) => c.model, layers, locked), 'model');

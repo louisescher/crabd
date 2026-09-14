@@ -87,14 +87,22 @@ describe('retryErrorDetail', () => {
  */
 describe('describeFatal', () => {
   it('classifies a resource-exhaustion abort ahead of everything else', () => {
-    expect(describeFatal('crabd: aborted', true, true, 40, 60_000)).toEqual({
+    expect(describeFatal('crabd: aborted', true, true, false, 40, 60_000)).toEqual({
       kind: 'resource_exhausted',
       message: 'crabd: aborted',
     });
   });
 
+  it('classifies a deadline abort ahead of everything else, however it surfaced', () => {
+    expect(describeFatal('crabd: aborted', true, true, true, 40, 1_200_000)).toEqual({
+      kind: 'timeout',
+      message: 'crabd: aborted',
+      timeoutMinutes: 20,
+    });
+  });
+
   it('classifies a max_turns abort, carrying the configured ceiling', () => {
-    expect(describeFatal('crabd: max_turns (40) exceeded', true, false, 40)).toEqual({
+    expect(describeFatal('crabd: max_turns (40) exceeded', true, false, false, 40)).toEqual({
       kind: 'max_turns',
       message: 'crabd: max_turns (40) exceeded',
       maxTurns: 40,
@@ -102,7 +110,7 @@ describe('describeFatal', () => {
   });
 
   it('classifies a timeout by message content, carrying the configured minutes', () => {
-    expect(describeFatal('the operation timed out', false, false, undefined, 120_000)).toEqual({
+    expect(describeFatal('the operation timed out', false, false, false, undefined, 120_000)).toEqual({
       kind: 'timeout',
       message: 'the operation timed out',
       timeoutMinutes: 2,
@@ -110,7 +118,7 @@ describe('describeFatal', () => {
   });
 
   it('falls back to a generic error for anything else', () => {
-    expect(describeFatal('crabd: the model never called submit', false, false)).toEqual({
+    expect(describeFatal('crabd: the model never called submit', false, false, false)).toEqual({
       kind: 'error',
       message: 'crabd: the model never called submit',
     });

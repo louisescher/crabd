@@ -188,6 +188,33 @@ describe('checkoutPrHead', () => {
     }
   });
 
+  it('passes env through to the fetch, proven by a GIT_CONFIG url.insteadOf rewrite of a bogus remote', () => {
+    const clone = mkdtempSync(join(tmpdir(), 'crabd-env-'));
+    try {
+      execFileSync('git', ['clone', '-q', '--depth=1', '--branch', 'main', `file://${dir}`, clone]);
+      // A remote that fails fast and locally, with no network involved.
+      execFileSync('git', ['remote', 'set-url', 'origin', 'file:///nonexistent/crabd-bogus-remote.git'], {
+        cwd: clone,
+      });
+
+      // Without the env, the bogus remote is unreachable and the checkout stays put.
+      expect(checkoutPrHead(clone, prHeadSha)).toBe(false);
+      expect(git(['rev-parse', 'HEAD'], clone)).toBe(baseSha);
+
+      // The env rewrites the bogus URL back to the real repo, so only a fetch that actually
+      // received it can succeed.
+      const env = {
+        GIT_CONFIG_COUNT: '1',
+        GIT_CONFIG_KEY_0: `url.file://${dir}.insteadOf`,
+        GIT_CONFIG_VALUE_0: 'file:///nonexistent/crabd-bogus-remote.git',
+      };
+      expect(checkoutPrHead(clone, prHeadSha, undefined, env)).toBe(true);
+      expect(git(['rev-parse', 'HEAD'], clone)).toBe(prHeadSha);
+    } finally {
+      rmSync(clone, { recursive: true, force: true });
+    }
+  });
+
   it('moves a clone onto the PR head fetched from origin', () => {
     const clone = mkdtempSync(join(tmpdir(), 'crabd-clone-'));
     try {

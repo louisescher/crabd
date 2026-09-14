@@ -14,6 +14,7 @@ import { foldCommentsIntoBody } from './review-body.ts';
 import { buildReviewThread } from './review-thread.ts';
 import { buildDiffFromFiles, type PullFilePatch } from './synth-diff.ts';
 import type {
+  BranchUpdate,
   CheckSummary,
   ChecksSummary,
   CommitRequest,
@@ -53,6 +54,10 @@ const MAX_CHANGED_FILES = 1_000;
 
 const THREAD_PAGES = 5;
 const MAX_REVIEWS = 100;
+
+/** How long to wait for GitHub's asynchronous update-branch merge to move the head. */
+const UPDATE_BRANCH_POLLS = 12;
+const UPDATE_BRANCH_POLL_MS = 2_000;
 
 const THREADS_QUERY = `
 query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
@@ -528,6 +533,37 @@ export class GitHubForge implements ForgeAdapter {
       parents: [parentSha],
     });
     await gh.git.updateRef({ ...base, ref: `heads/${request.branch}`, sha: commit.sha, force: false });
+  }
+
+  /**
+   * Merge the pull request's base branch into its head branch through GitHub's own endpoint. The
+   * endpoint answers 202 with no sha, so the new head is polled for.
+   */
+  async updateBranch(prNumber: number, options?: { expectedHeadSha?: string }): Promise<BranchUpdate> {
+    const gh = await this.gh();
+    const base = { owner: this.owner, repo: this.name };
+    const before = options?.expectedHeadSha ?? (await gh.pulls.get({ ...base, pull_number: prNumber })).data.head.sha;
+
+    try {
+      await gh.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch', {
+        ...base,
+        pull_number: prNumber,
+        ...(options?.expectedHeadSha ? { expected_head_sha: options.expectedHeadSha } : {}),
+      });
+    } catch (error) {
+      const status = (error as { status?: number }).status;
+      const detail = (error as { message?: string }).message ?? 'the merge could not be applied';
+      if (status === 422) return { status: 'conflict', message: detail };
+      if (status === 403) return { status: 'unsupported', message: detail };
+      throw error;
+    }
+
+    for (let attempt = 0; attempt < UPDATE_BRANCH_POLLS; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, UPDATE_BRANCH_POLL_MS));
+      const { data } = await gh.pulls.get({ ...base, pull_number: prNumber });
+      if (data.head.sha !== before) return { status: 'updated', headSha: data.head.sha };
+    }
+    return { status: 'up-to-date' };
   }
 
   async openOrUpdatePR(request: OpenPrRequest): Promise<PullRequestRef> {

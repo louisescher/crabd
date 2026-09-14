@@ -131,7 +131,8 @@ export {
   type Baseline,
   type BaselineEntry,
 } from './git/changes.ts';
-export { checkoutPrHead, resolveWorkspace, type WorkspaceState } from './git/workspace.ts';
+export { checkoutPrHead, resolveWorkspace, type GitEnv, type WorkspaceState } from './git/workspace.ts';
+export { stripCheckoutCredentials } from './git/credentials.ts';
 
 // Rate limiting
 export {
@@ -158,6 +159,7 @@ export {
   renderRateLimitExhausted,
   renderResult,
   renderWorking,
+  RUNNING_MARKER,
   TRACKING_MARKER,
   FINDING_MARKER,
   MEMORY_MARKER,

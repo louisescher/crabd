@@ -99,14 +99,17 @@ export function describeFatal(
   message: string,
   maxTurnsHit: boolean,
   resourceExhausted: boolean,
+  timedOut: boolean,
   maxTurns?: number,
   timeoutMs?: number,
 ): Record<string, JsonValue> {
+  const minutes = timeoutMs ? timeoutMs / 60_000 : undefined;
+  // Checked first: aborting past the deadline surfaces as a generic "aborted" message.
+  if (timedOut) return { kind: 'timeout', message, ...(minutes ? { timeoutMinutes: minutes } : {}) };
   if (resourceExhausted) return { kind: 'resource_exhausted', message };
   if (maxTurnsHit) return { kind: 'max_turns', message, ...(maxTurns ? { maxTurns } : {}) };
   const m = message.toLowerCase();
   if (m.includes('timeout') || m.includes('timed out')) {
-    const minutes = timeoutMs ? timeoutMs / 60_000 : undefined;
     return { kind: 'timeout', message, ...(minutes ? { timeoutMinutes: minutes } : {}) };
   }
   return { kind: 'error', message };
@@ -147,6 +150,41 @@ export function retryErrorDetail(attributes: unknown): string {
   if (!attributes || typeof attributes !== 'object') return '';
   const { error } = attributes as { error?: unknown };
   return error ? describeTurnError(error) : '';
+}
+
+/**
+ * A timeout signal that also fires when the run's own deadline does, so a bounded sub-call can
+ * never outlive the run it belongs to.
+ */
+function boundedSignal(timeoutMs: number, deadline: AbortSignal | undefined): AbortSignal {
+  const own = AbortSignal.timeout(timeoutMs);
+  return deadline ? AbortSignal.any([own, deadline]) : own;
+}
+
+/** What flue reports alongside a retry, when it reports it. Every field is optional by design. */
+export interface ModelRetry {
+  attempt?: number;
+  maxRetries?: number;
+  delayMs?: number;
+  detail: string;
+}
+
+/**
+ * The whole of a `[flue:model-retry]` log event, not just its error, so a retry comment can name
+ * the attempt number and backoff instead of just "retrying".
+ */
+export function parseModelRetry(attributes: unknown): ModelRetry {
+  const detail = retryErrorDetail(attributes);
+  if (!attributes || typeof attributes !== 'object') return { detail };
+  const a = attributes as { attempt?: unknown; maxRetries?: unknown; delayMs?: unknown };
+  const num = (value: unknown): number | undefined =>
+    typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  return {
+    detail,
+    ...(num(a.attempt) !== undefined ? { attempt: num(a.attempt) } : {}),
+    ...(num(a.maxRetries) !== undefined ? { maxRetries: num(a.maxRetries) } : {}),
+    ...(num(a.delayMs) !== undefined ? { delayMs: num(a.delayMs) } : {}),
+  };
 }
 
 /**
@@ -209,7 +247,8 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
   const target = ctx.progress;
   const brand = ctx.branding;
   const chain = buildAttemptChain(primaryModel, rl.fallbackModels, rl.maxRetries);
-  const maxWaitMs = Math.max(0, rl.maxWaitSeconds) * 1000;
+  // Clamped to the run deadline: a backoff that outlives the budget it is spending is not a budget.
+  const maxWaitMs = Math.min(Math.max(0, rl.maxWaitSeconds) * 1000, ctx.timeoutMs ?? Number.POSITIVE_INFINITY);
 
   const hasMaxTurns = !!(ctx.maxTurns && ctx.maxTurns > 0);
   const maxTurns = hasMaxTurns ? ctx.maxTurns! : 0;
@@ -232,8 +271,22 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
   // counting tool starts and aborting is still crab'd's job. What changed is the abort surface —
   // `handle.abort()` is a durable instance abort rather than cancelling one prompt call.
   let toolStarts = 0;
+  // Counted across the whole run: flue's own same-model retries happen inside one `handle.read`,
+  // before crab'd's fallback chain sees anything.
+  let transientRetries = 0;
   let currentModel = primaryModel;
   let currentAbort: (() => Promise<void>) | undefined;
+
+  // One deadline for the whole run, created before the chain: a per-attempt timer bounds nothing
+  // once the fallback chain walks to the next model.
+  const deadline = ctx.timeoutMs ? AbortSignal.timeout(ctx.timeoutMs) : undefined;
+  let abortedForTimeout = false;
+  deadline?.addEventListener('abort', () => {
+    abortedForTimeout = true;
+    warn(`[${ctx.runId}] run deadline of ${(ctx.timeoutMs ?? 0) / 60_000} minutes reached, aborting`);
+    // Cancelling the read alone leaves the submission running, so abort the instance.
+    void currentAbort?.();
+  });
   let abortedForMaxTurns = false;
   let wrapUpRequested = false;
 
@@ -245,6 +298,7 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
   // comment. See `describeFatal` below for how this becomes a `resource_exhausted` outcome.
   let abortedForResourceLimit = false;
   let heapWarned = false;
+  log(`[${ctx.runId}] heap limit ${heapUsageRatio().limitMb} MB`);
   const heapWatchdog = setInterval(() => {
     const { ratio, usedMb, limitMb } = heapUsageRatio();
     if (ratio >= HEAP_ABORT_RATIO) {
@@ -279,6 +333,8 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
     switch (e.type) {
       case 'tool_start':
         toolStarts += 1;
+        // Args stay behind `debug`: they can carry file contents into a public repository's log.
+        log(`[${ctx.runId}] tool_start ${e.toolName}`);
         debug(() => `[${ctx.runId}] tool_start ${e.toolName} args=${truncate(e.args)}`);
         if (!hasMaxTurns || !currentAbort) return;
         // Once the wrap-up is in flight the budget stops applying: the reserve exists so the final
@@ -294,31 +350,29 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
         }
         return;
       case 'tool':
-        debug(
-          () =>
-            `[${ctx.runId}] tool ${e.toolName} ${e.isError ? 'failed' : 'ok'} in ${e.durationMs}ms result=${truncate(e.result)}`,
-        );
+        log(`[${ctx.runId}] tool ${e.toolName} ${e.isError ? 'failed' : 'ok'} in ${e.durationMs}ms`);
+        debug(() => `[${ctx.runId}] tool ${e.toolName} result=${truncate(e.result)}`);
         return;
       case 'turn_start':
-        debug(() => `[${ctx.runId}] turn_start ${e.turnId} purpose=${e.purpose} model=${currentModel}`);
+        log(`[${ctx.runId}] turn_start ${e.turnId} purpose=${e.purpose} model=${currentModel}`);
         return;
       case 'turn': {
         const usage = e.response.usage;
         const usageStr = usage
           ? `in=${usage.input} out=${usage.output} cacheRead=${usage.cacheRead} cacheWrite=${usage.cacheWrite}`
           : 'no usage';
-        debug(
-          () =>
-            `[${ctx.runId}] turn ${e.turnId} purpose=${e.purpose} model=${e.request.requestedModel} ${e.durationMs}ms ` +
+        log(
+          `[${ctx.runId}] turn ${e.turnId} purpose=${e.purpose} model=${e.request.requestedModel} ${e.durationMs}ms ` +
             `${e.isError ? 'ERROR' : 'ok'} ${usageStr}`,
         );
         return;
       }
       case 'task_start':
-        debug(() => `[${ctx.runId}] task_start ${e.taskId} agent=${e.agent ?? '(default)'} prompt=${truncate(e.prompt, 200)}`);
+        log(`[${ctx.runId}] task_start ${e.taskId} agent=${e.agent ?? '(default)'}`);
+        debug(() => `[${ctx.runId}] task_start ${e.taskId} prompt=${truncate(e.prompt, 200)}`);
         return;
       case 'task':
-        debug(() => `[${ctx.runId}] task ${e.taskId} agent=${e.agent ?? '(default)'} ${e.durationMs}ms ${e.isError ? 'ERROR' : 'ok'}`);
+        log(`[${ctx.runId}] task ${e.taskId} agent=${e.agent ?? '(default)'} ${e.durationMs}ms ${e.isError ? 'ERROR' : 'ok'}`);
         return;
       case 'compaction_start':
         log(`[${ctx.runId}] compaction started: reason=${e.reason} estimatedTokens=${e.estimatedTokens}`);
@@ -345,12 +399,21 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
           // `error` field read above, so it needs its own hop out of the attributes. Recorded as
           // `lastTurnError` too: if the retry itself then fails opaquely, this is what lets the fallback
           // chain classify the attempt on the failure that actually started it.
-          const detail = retryErrorDetail(e.attributes);
-          if (detail) {
-            lastTurnError = detail;
-            log(`model retry: ${detail}`);
-          }
-          postRateLimited({ mode: input.mode, provider: providerOf(currentModel), switching: false });
+          const retry = parseModelRetry(e.attributes);
+          if (retry.detail) lastTurnError = retry.detail;
+          transientRetries += 1;
+          log(
+            `[${ctx.runId}] model retry ${retry.attempt ?? '?'}/${retry.maxRetries ?? '?'} on ${currentModel} ` +
+              `after ${retry.delayMs ?? 0}ms: ${retry.detail || '(no detail)'}`,
+          );
+          postRateLimited({
+            mode: input.mode,
+            provider: providerOf(currentModel),
+            nextModel: currentModel,
+            switching: false,
+            ...(retry.attempt !== undefined ? { attempt: retry.attempt } : {}),
+            ...(retry.delayMs !== undefined ? { waitSeconds: retry.delayMs / 1000 } : {}),
+          });
         } else {
           debug(() => `[${ctx.runId}] flue log[${e.level}]: ${e.message}`);
         }
@@ -407,14 +470,14 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
     });
     let reply;
     try {
-      reply = await handle.read(receipt);
+      reply = await handle.read(receipt, deadline ? { signal: deadline } : undefined);
     } catch (error) {
       // The budget observer aborted mid-turn. A soft abort still has a wrap-up left: ask the same
       // instance, which keeps everything it read, for its best current answer.
       if (wrapUpRequested && !abortedForMaxTurns) {
         try {
           const wrapReceipt = await handle.dispatch(WRAP_UP_INSTRUCTION);
-          const wrapped = await handle.read(wrapReceipt, { signal: AbortSignal.timeout(WRAP_UP_TIMEOUT_MS) });
+          const wrapped = await handle.read(wrapReceipt, { signal: boundedSignal(WRAP_UP_TIMEOUT_MS, deadline) });
           const data = readResult(wrapped.data);
           if (data !== undefined) return { data, model, partial: true };
         } catch {
@@ -489,7 +552,7 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
 
       try {
         const receipt = await handle.dispatch(verdict.repairPrompt);
-        const reply = await handle.read(receipt, { signal: AbortSignal.timeout(REPAIR_TIMEOUT_MS) });
+        const reply = await handle.read(receipt, { signal: boundedSignal(REPAIR_TIMEOUT_MS, deadline) });
         const data = readResult(reply.data);
         if (data === undefined) return current;
         current = { ...current, data };
@@ -513,8 +576,9 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
       backoff: rl.backoff,
       maxWaitMs,
       runOnce,
-      // A deliberate max_turns or resource-limit abort must not be mistaken for a rate limit.
-      isFatal: () => abortedForMaxTurns || abortedForResourceLimit,
+      // A deliberate abort must not be mistaken for a rate limit, and a run past its deadline must
+      // not walk to the next model in the chain and start again.
+      isFatal: () => abortedForMaxTurns || abortedForResourceLimit || abortedForTimeout,
       onSwitch: ({ fromModel, nextModel, attempt, waitMs }) => {
         postRateLimited(
           {
@@ -537,6 +601,7 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
         message,
         abortedForMaxTurns,
         abortedForResourceLimit,
+        abortedForTimeout,
         hasMaxTurns ? maxTurns : undefined,
         ctx.timeoutMs,
       ),
@@ -553,6 +618,7 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
       attempts: outcome.attempts,
     };
     if (outcome.lastModel) error.lastModel = outcome.lastModel;
+    if (transientRetries > 0) error.providerRetries = transientRetries;
     return { ok: false, error };
   }
 

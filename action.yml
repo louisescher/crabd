@@ -54,6 +54,9 @@ outputs:
 runs:
   using: docker
   image: docker://ghcr.io/louisescher/crabd:v1
+  # Runs even after a cancel or crash, so a run that died mid-turn still gets reported.
+  post-entrypoint: "/app/packages/action/docker-post.sh"
+  post-if: always()
   env:
     CRABD_INPUT_MODEL: ${{ inputs.model }}
     CRABD_INPUT_TRIGGER_PHRASE: ${{ inputs.trigger-phrase }}

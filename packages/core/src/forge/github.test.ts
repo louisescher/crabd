@@ -108,3 +108,84 @@ describe('GitHubForge.getContext', () => {
     await expect(forge().getContext(event)).rejects.toThrow();
   });
 });
+
+// Mirrors UPDATE_BRANCH_POLLS / UPDATE_BRANCH_POLL_MS in github.ts.
+const POLLS = 12;
+const POLL_MS = 2_000;
+
+function mockUpdateBranch(options: { putStatus?: number; putMessage?: string; pollShas: string[] }) {
+  const requests: { method: string; url: string; body?: Record<string, unknown> }[] = [];
+  let getIndex = 0;
+  vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
+    const method = init.method ?? 'GET';
+    const body = typeof init.body === 'string' && init.body.length > 0 ? JSON.parse(init.body) : undefined;
+    requests.push({ method, url, body });
+
+    if (method === 'PUT' && url.includes('/pulls/7/update-branch')) {
+      const status = options.putStatus ?? 202;
+      const message = status >= 400 ? (options.putMessage ?? 'error') : 'Updating pull request branch.';
+      return new Response(JSON.stringify({ message }), { status, headers: { 'content-type': 'application/json' } });
+    }
+    if (method === 'GET' && new URL(url).pathname === '/repos/acme/app/pulls/7') {
+      const sha = options.pollShas[Math.min(getIndex, options.pollShas.length - 1)];
+      getIndex += 1;
+      return new Response(JSON.stringify({ number: 7, head: { sha }, base: { sha: 'base' } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    throw new Error(`unexpected request: ${method} ${url}`);
+  });
+  return { requests, getCalls: () => getIndex };
+}
+
+describe('GitHubForge.updateBranch', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('polls until the head sha moves, returning the new sha', async () => {
+    vi.useFakeTimers();
+    mockUpdateBranch({ pollShas: ['sha0', 'sha0', 'sha1'] });
+
+    const promise = forge().updateBranch(7);
+    await vi.advanceTimersByTimeAsync(POLL_MS); // first poll: unchanged
+    await vi.advanceTimersByTimeAsync(POLL_MS); // second poll: moved
+
+    await expect(promise).resolves.toEqual({ status: 'updated', headSha: 'sha1' });
+  });
+
+  it('returns a conflict with GitHub\'s message on a 422', async () => {
+    mockUpdateBranch({ putStatus: 422, putMessage: 'Merge conflict', pollShas: ['sha0'] });
+
+    await expect(forge().updateBranch(7)).resolves.toEqual({ status: 'conflict', message: 'Merge conflict' });
+  });
+
+  it('returns unsupported on a 403', async () => {
+    mockUpdateBranch({ putStatus: 403, putMessage: 'Not Found', pollShas: ['sha0'] });
+
+    await expect(forge().updateBranch(7)).resolves.toEqual({ status: 'unsupported', message: 'Not Found' });
+  });
+
+  it('reports up-to-date when the head never moves across every poll', async () => {
+    vi.useFakeTimers();
+    const mock = mockUpdateBranch({ pollShas: ['sha0'] });
+
+    const promise = forge().updateBranch(7);
+    await vi.advanceTimersByTimeAsync(POLLS * POLL_MS);
+
+    await expect(promise).resolves.toEqual({ status: 'up-to-date' });
+    expect(mock.getCalls()).toBe(1 + POLLS); // the initial head check, then every poll
+  });
+
+  it('forwards expectedHeadSha as expected_head_sha and skips the initial pulls.get', async () => {
+    vi.useFakeTimers();
+    const mock = mockUpdateBranch({ pollShas: ['sha1'] });
+
+    const promise = forge().updateBranch(7, { expectedHeadSha: 'sha0' });
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+
+    await expect(promise).resolves.toEqual({ status: 'updated', headSha: 'sha1' });
+    expect(mock.getCalls()).toBe(1); // only the poll; no pre-check pulls.get
+    const put = mock.requests.find((r) => r.method === 'PUT');
+    expect(put?.body).toMatchObject({ expected_head_sha: 'sha0' });
+  });
+});

@@ -11,27 +11,30 @@ From lowest to highest precedence:
 
 1. **Built-in defaults**: shipped with crab'd.
 2. **Org config repo**: `.crabd.yml` in `<owner>/.crabd-config` (configurable). The only layer that
-   can *govern*.
-3. **Repo**: the target repo's `.crabd.yml`.
-4. **CI inputs**: `with:` inputs on the action (`model`, `trigger-phrase`, `providers`, ...).
-5. **Environment**: an advanced `CRABD_CONFIG_ENV` YAML blob.
+   can _govern_.
+3. **Repo**: the target repo's `.crabd.yml`, read from the checkout.
+4. **Repo, trusted**: `permissions.*`, `governance.*`, and `prompt.override`, read from the repo's
+   default branch on a pull request. See
+   [Permissions, governance, and the prompt on a pull request](#permissions-governance-and-the-prompt-on-a-pull-request).
+5. **CI inputs**: `with:` inputs on the action (`model`, `trigger-phrase`, `providers`, ...).
+6. **Environment**: an advanced `CRABD_CONFIG_ENV` YAML blob.
 
-Higher layers win, but *how* they win depends on the value.
+Higher layers win, but _how_ they win depends on the value.
 
 ## Three merge rules
 
-| Kind | Rule | Examples |
-| --- | --- | --- |
-| **Scalars** | Highest layer that sets it wins. | `model`, `trigger_phrase`, `thinking_level`, `limits.*` |
-| **Instructions** | **Accumulate**: concatenated across every layer, in order. | `prompt.instructions`, `modes.*.instructions` |
-| **Value lists** | **Replaced** by the highest layer that sets them. | `providers.allowlist`, `modes.*.tools` |
-| **Keyed lists** | **Reconciled by key**: a higher layer merges into a same-key entry field by field, and adds new ones. | `providers.custom` (by `id`), `mcp` (by `name`) |
+| Kind             | Rule                                                                                                  | Examples                                                |
+| ---------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| **Scalars**      | Highest layer that sets it wins.                                                                      | `model`, `trigger_phrase`, `thinking_level`, `limits.*` |
+| **Instructions** | **Accumulate**: concatenated across every layer, in order.                                            | `prompt.instructions`, `modes.*.instructions`           |
+| **Value lists**  | **Replaced** by the highest layer that sets them.                                                     | `providers.allowlist`, `modes.*.tools`                  |
+| **Keyed lists**  | **Reconciled by key**: a higher layer merges into a same-key entry field by field, and adds new ones. | `providers.custom` (by `id`), `mcp` (by `name`)         |
 
 ### Why the split matters
 
-- Because instructions *accumulate*, org house rules are always in effect and repos add to them. See
+- Because instructions _accumulate_, org house rules are always in effect and repos add to them. See
   [Custom prompts](/custom-prompts/#instructions-accumulate-across-layers).
-- Because lists are *replaced*, a repo that sets `providers.allowlist` overrides the org's list
+- Because lists are _replaced_, a repo that sets `providers.allowlist` overrides the org's list
   entirely, unless the org **locks** it (below).
 
 ## Worked example
@@ -43,6 +46,7 @@ providers:
 prompt:
   instructions: "- Never add a dependency without justification."
 ```
+
 ```yaml title="repo: .crabd.yml"
 model: openai/gpt-5.5
 providers:
@@ -76,6 +80,29 @@ openai]` is ignored. Locked keys ignore the repo, CI inputs, **and** env.
 
 Replacing the base prompt is off by default and only permitted for repos the org names. See
 [Custom prompts → full override](/custom-prompts/#replacing-the-base-prompt-full-override).
+
+## Permissions, governance, and the prompt on a pull request
+
+Three sections are read from a different place on a pull request. crab'd reads
+`permissions.*`, `governance.*`, and `prompt.override` from the repository's **default
+branch**. This is the `repoTrusted` layer.
+
+```yaml title="default branch: .crabd.yml"
+permissions:
+  secret_scan: false
+```
+
+```yaml title="PR checkout: .crabd.yml"
+permissions:
+  secret_scan: true
+```
+
+Resolved: `permissions.secret_scan = false`. The PR checkout's `true` never contributes, and a
+setting pushed to the default branch takes effect on an already-open pull request.
+
+crab'd skips the extra fetch, and uses the checkout as-is, when the run isn't on a pull request or
+when the PR's head branch is already the default branch. An absent, empty, or unparseable file on
+the default branch falls back to the org and built-in layers.
 
 ## Reading the org config repo
 

@@ -1,8 +1,24 @@
-import { defineTool, useDataWriter, useInitialData, useMcpConnection, useModel, useSandbox, useTool } from '@flue/runtime';
+import {
+  defineTool,
+  useDataWriter,
+  useInitialData,
+  useMcpConnection,
+  useModel,
+  useSandbox,
+  useTool,
+  type DurabilityConfig,
+} from '@flue/runtime';
 import { local } from '@flue/runtime/node';
 import * as v from 'valibot';
 import { getMode } from '@crabd/core';
-import { configuredWebSearchTools, mcpConnections, progressTool, rememberTool, runContext } from '../run-context.ts';
+import {
+  configuredWebSearchTools,
+  mcpConnections,
+  progressTool,
+  rememberTool,
+  runContext,
+  updateBranchTool,
+} from '../run-context.ts';
 
 /**
  * Per-instance facts, recorded at creation. These used to travel as `CRABD_*` env vars because the
@@ -42,6 +58,8 @@ export function CrabdTurn() {
   // never offered a way to record something that would then fail to land.
   const remember = rememberTool();
   if (remember) useTool(remember);
+  const updateBranch = updateBranchTool();
+  if (updateBranch) useTool(updateBranch);
   for (const tool of configuredWebSearchTools()) useTool(tool);
 
   // The mode owns the answer's shape. Without a resolved mode there is nothing to validate against,
@@ -78,5 +96,8 @@ const SUBMIT_DIRECTIVE = [
 ].join('\n');
 
 CrabdTurn.agentName = 'crabd-turn';
+
+/** Set from `limits.timeout_minutes` before the runtime starts. Absent, flue's own hour default applies. */
+CrabdTurn.durability = undefined as DurabilityConfig | undefined;
 
 const DEFAULT_MODEL = 'anthropic/claude-sonnet-4-6';

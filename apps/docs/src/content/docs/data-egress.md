@@ -34,7 +34,7 @@ An unauthorized actor's mention is ignored before any model call.
 
 The [provider allowlist](/providers/#the-provider-allowlist) is the core egress guardrail. It is
 **empty by default (any provider allowed)** so crab'd works with zero config — set it to restrict.
-Once set, a model whose provider isn't listed fails the run *before* anything is sent:
+Once set, a model whose provider isn't listed fails the run _before_ anything is sent:
 
 ```yaml title=".crabd.yml"
 providers:
@@ -63,9 +63,9 @@ Locked keys can't be overridden by the repo file, CI inputs, or env. See
 ## The sandbox
 
 The agent edits code in a **local sandbox** rooted at the checked-out repo. Its shell/tools get an
-**empty env allowlist by default**, no host secrets leak into the model's bash tool. Expose specific
-vars only when a task needs them — via the [`sandbox`](/reference/config-yaml/#sandbox) config (or
-the low-level `CRABD_SANDBOX_ENV`).
+**empty env allowlist by default**, so no host secrets reach the model's bash tool through that
+path. Expose specific vars only when a task needs them, through the
+[`sandbox`](/reference/config-yaml/#sandbox) config (or the low-level `CRABD_SANDBOX_ENV`).
 
 Two opt-in features deliberately put credentials in front of the model (see
 [Cross-repo access & private registries](/access/)):

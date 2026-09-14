@@ -19,6 +19,9 @@ to a branch, and notes the branch in its reply.
 /crabd add a unit test for the empty-input case    # implemented and committed
 ```
 
+Asking a mention to update the branch or deal with merge conflicts works the same way a round does,
+through [`update_branch`](#updating-the-branch).
+
 A mention that asks for nothing never produces a commit. A bare `/crabd`, or a question, gets an
 answer: crab'd will not decide on its own that a fix it noticed is worth pushing to your branch. If
 it edited files anyway, it says so and leaves them uncommitted. To get the change, ask for it.
@@ -109,16 +112,29 @@ request is for. Style and naming preferences are not grounds to decline.
 
 A round never retitles the pull request, never creates a second branch, and never rewrites history.
 
+### Updating the branch
+
+crab'd cannot merge, rebase, or push on its own, because the `git` in its sandbox cannot change the repository.
+To bring a pull request's branch up to date with its base, or to move past merge conflicts a round
+hit, crab'd calls `update_branch`. This merges the base into the head on the forge, under crab'd's identity, then
+moves the run's checkout onto the merged result. `update_branch` only works before crab'd has changed any files.
+
+The tool is available on any pull request crab'd can write to, `mention` runs included. It is absent
+from a `review` run, an issue run, a fork pull request, and a run with `permissions.write: false`.
+Forgejo has no endpoint for merging a base branch into a pull request, so a Forgejo
+round reports that the branch has to be updated by hand.
+
 ### What each forge can do
 
-| | GitHub | Forgejo v16 |
-| --- | --- | --- |
-| Round from a comment mention | yes | yes |
-| Round from a submitted review | yes | no such trigger event |
-| Round from an inline review comment | yes | no such trigger event |
-| Reply inside each conversation | yes | one summary comment instead |
-| Resolve the conversations it fixed | yes | no API for it |
-| Read the failing checks and their logs | yes | yes |
+|                                        | GitHub | Forgejo v16+                |
+| -------------------------------------- | ------ | --------------------------- |
+| Round from a comment mention           | yes    | yes                         |
+| Round from a submitted review          | yes    | no such trigger event       |
+| Round from an inline review comment    | yes    | no such trigger event       |
+| Reply inside each conversation         | yes    | one summary comment instead |
+| Resolve the conversations it fixed     | yes    | no API for it               |
+| Read the failing checks and their logs | yes    | yes                         |
+| Update the branch (`update_branch`)    | yes    | no endpoint for it          |
 
 Forgejo Actions has no `pull_request_review` or `pull_request_review_comment` trigger, so a review
 submitted on Forgejo cannot start a run. Comment `/crabd implement address the review` instead. The
@@ -165,11 +181,11 @@ See the [config reference](/reference/config-yaml/#implement) for the rest of th
 Whatever follows the mention (and any mode keyword) is threaded into the run as an explicit
 instruction. This works for every mode:
 
-| Comment | Mode | Instruction passed to the agent |
-| --- | --- | --- |
-| `/crabd explain this function` | mention | `explain this function` |
-| `/crabd review focus on tests` | review | `focus on tests` |
-| `/crabd implement use the new API` | implement | `use the new API` |
+| Comment                            | Mode      | Instruction passed to the agent |
+| ---------------------------------- | --------- | ------------------------------- |
+| `/crabd explain this function`     | mention   | `explain this function`         |
+| `/crabd review focus on tests`     | review    | `focus on tests`                |
+| `/crabd implement use the new API` | implement | `use the new API`               |
 
 ## Enabling and disabling modes
 

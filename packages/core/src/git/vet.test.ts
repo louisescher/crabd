@@ -1,5 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FileChange } from '../forge/types.ts';
 import { renderVetFailureMessage, scanForSecrets } from './vet.ts';
 
@@ -22,6 +25,12 @@ function upsert(path: string, content: string): FileChange {
   return { path, op: 'upsert', contentBase64: Buffer.from(content).toString('base64') };
 }
 
+function writeFakeGitleaks(dir: string, script: string): string {
+  const path = join(dir, 'gitleaks-fake');
+  writeFileSync(path, script, { mode: 0o755 });
+  return path;
+}
+
 describe('scanForSecrets', () => {
   it('returns ok for no changes', () => {
     expect(scanForSecrets([])).toEqual({ ok: true });
@@ -35,7 +44,64 @@ describe('scanForSecrets', () => {
   it('fails closed (scan_unavailable), never ok, when the binary is missing', () => {
     const result = scanForSecrets([upsert('a.txt', 'hello')], { binary: '/nonexistent/gitleaks' });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toBe('scan_unavailable');
+    if (result.ok) return;
+    expect(result.reason).toBe('scan_unavailable');
+    if (result.reason !== 'scan_unavailable') return;
+    expect(result.cause).toBe('binary_missing');
+    const message = renderVetFailureMessage(result);
+    expect(message).toContain('not on PATH');
+    expect(message).toContain('report it');
+  });
+
+  describe('gitleaks timing out', () => {
+    let dir: string;
+
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), 'crabd-vet-fake-'));
+    });
+
+    afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+    it('retries once on a timeout and succeeds if the retry finishes in time', () => {
+      const counterPath = join(dir, 'attempts');
+      const binary = writeFakeGitleaks(
+        dir,
+        `#!/bin/sh
+if [ ! -f "${counterPath}" ]; then
+  echo 1 > "${counterPath}"
+  sleep 5
+fi
+exit 0
+`,
+      );
+
+      const result = scanForSecrets([upsert('a.txt', 'hello')], { binary, timeoutMs: 1_000 });
+      expect(result).toEqual({ ok: true });
+    });
+
+    it('fails closed with cause "timeout" when the retry also times out', () => {
+      const binary = writeFakeGitleaks(
+        dir,
+        `#!/bin/sh
+sleep 5
+exit 0
+`,
+      );
+
+      const result = scanForSecrets([upsert('a.txt', 'hello'), upsert('b.txt', 'world')], { binary, timeoutMs: 200 });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toBe('scan_unavailable');
+      if (result.reason !== 'scan_unavailable') return;
+      expect(result.cause).toBe('timeout');
+      expect(result.timeoutMs).toBe(200);
+      expect(result.fileCount).toBe(2);
+
+      const message = renderVetFailureMessage(result);
+      expect(message).toContain('did not finish scanning 2 files');
+      expect(message).toContain('200ms');
+      expect(message).toContain('permissions.secret_scan');
+    });
   });
 
   it.runIf(hasGitleaks)('returns ok for clean content', () => {
@@ -87,9 +153,9 @@ describe('scanForSecrets', () => {
 
 describe('renderVetFailureMessage', () => {
   it('renders a scan_unavailable reason without exposing internals oddly', () => {
-    const message = renderVetFailureMessage({ ok: false, reason: 'scan_unavailable', detail: 'ENOENT' });
+    const message = renderVetFailureMessage({ ok: false, reason: 'scan_unavailable', cause: 'other', detail: 'spawnSync gitleaks EACCES' });
     expect(message).toContain('could not run');
-    expect(message).toContain('ENOENT');
+    expect(message).toContain('EACCES');
   });
 
   it('caps the listed findings and notes how many more there are', () => {

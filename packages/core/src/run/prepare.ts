@@ -121,6 +121,8 @@ export interface PrepareInput {
    * `plan.branding`.
    */
   advisories?: string[];
+  /** Link to the CI run. Goes onto `plan.branding`, so every tracking-comment state carries it. */
+  runUrl?: string;
 }
 
 /**
@@ -370,6 +372,7 @@ export async function prepareRun(input: PrepareInput): Promise<PrepareOutcome> {
 
   const branding: CommentContext = {
     ...config.appearance,
+    ...(input.runUrl ? { runUrl: input.runUrl } : {}),
     ...(advisories.length > 0 ? { advisories } : {}),
     ...(event.comment ? { handledCommentId: event.comment.id, handledKind } : {}),
     ...(roundClaim ? { roundClaim } : {}),

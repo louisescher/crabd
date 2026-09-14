@@ -1,14 +1,18 @@
 import { execFileSync } from 'node:child_process';
 import { debug, warn } from '../logger.ts';
 
+/** Extra environment for a git child process, for a fetch that needs credentials the checkout no longer has. */
+export type GitEnv = Record<string, string>;
+
 /** Run a git command, returning `undefined` instead of throwing when it fails. */
-function tryGit(args: string[], cwd: string): string | undefined {
+function tryGit(args: string[], cwd: string, env?: GitEnv): string | undefined {
   try {
     return execFileSync('git', args, {
       cwd,
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],
       maxBuffer: 16 * 1024 * 1024,
+      ...(env ? { env: { ...process.env, ...env } } : {}),
     }).trim();
   } catch {
     return undefined;
@@ -113,7 +117,7 @@ function detachOnto(cwd: string, headSha: string): boolean {
  * here because a non-forced checkout leaves them alone: refusing on those meant one stray artifact
  * in the workspace (a cloud-auth step's credentials file, say) blocked the fix for no reason.
  */
-export function checkoutPrHead(cwd: string, headSha: string, prNumber?: number): boolean {
+export function checkoutPrHead(cwd: string, headSha: string, prNumber?: number, env?: GitEnv): boolean {
   debug(() => `checkoutPrHead: attempting ${headSha} (PR #${prNumber ?? '?'})`);
 
   if ((tryGit(['status', '--porcelain', '--untracked-files=no'], cwd) ?? '').trim()) {
@@ -132,7 +136,7 @@ export function checkoutPrHead(cwd: string, headSha: string, prNumber?: number):
   }
 
   for (const fetch of attempts) {
-    if (tryGit(fetch, cwd) === undefined) continue;
+    if (tryGit(fetch, cwd, env) === undefined) continue;
     // Detach onto the sha itself rather than FETCH_HEAD so the result is unambiguous.
     if (detachOnto(cwd, headSha)) return true;
   }

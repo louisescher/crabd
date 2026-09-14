@@ -12,6 +12,7 @@ import {
   tail,
 } from './checks.ts';
 import type {
+  BranchUpdate,
   CheckSummary,
   ChecksSummary,
   CommitRequest,
@@ -389,6 +390,14 @@ export class ForgejoForge implements ForgeAdapter {
       };
       await this.api(sha ? 'PUT' : 'POST', path, payload);
     }
+  }
+
+  /** Forgejo has no update-branch endpoint through v16, so this always reports unsupported. */
+  async updateBranch(): Promise<BranchUpdate> {
+    return {
+      status: 'unsupported',
+      message: 'Forgejo has no endpoint for merging a base branch into a pull request, so this branch has to be updated by hand.',
+    };
   }
 
   async openOrUpdatePR(request: OpenPrRequest): Promise<PullRequestRef> {

@@ -1,9 +1,8 @@
 import { defineConfig } from 'tsdown';
 
-// One bundle: the CLI is the whole program. The agents run in-process via `start()`, so there is no
-// separate Flue server to build and `clean` is safe now that nothing else writes to dist.
+// Two bundles: `post` is the action's post step, which has to survive the CLI process crashing.
 export default defineConfig({
-  entry: ['src/cli.ts'],
+  entry: ['src/cli.ts', 'src/post.ts'],
   format: ['esm'],
   dts: false,
   clean: true,

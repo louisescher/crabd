@@ -47,6 +47,21 @@ describe('classifyModelError', () => {
     expect(classifyModelError('')).toBe('fatal');
     expect(classifyModelError(undefined)).toBe('fatal');
   });
+
+  it('classifies a real Vertex 429 error, in scope for the default transient trigger', () => {
+    const vertex429 =
+      "{\"error\":{\"message\":\"{\\n  \\\"error\\\": {\\n    \\\"code\\\": 429,\\n    \\\"message\\\": \\\"Resource exhausted. Please try again later. Please refer to https://cloud.google.com/vertex-ai/generative-ai/docs/error-code-429 for more details.\\\",\\n    \\\"status\\\": \\\"RESOURCE_EXHAUSTED\\\"\\n  }\\n}\\n\",\"code\":429,\"status\":\"Too Many Requests\"}}";
+
+    expect(classifyModelError(vertex429)).toBe('rate_limit');
+    expect(isInFallbackScope(classifyModelError(vertex429), 'transient')).toBe(true);
+  });
+
+  it('classifies a RESOURCE_EXHAUSTED payload carrying no status code as a rate limit too', () => {
+    const noStatusCode = '{"error":{"message":"Resource exhausted.","status":"RESOURCE_EXHAUSTED"}}';
+
+    expect(classifyModelError(noStatusCode)).toBe('rate_limit');
+    expect(isInFallbackScope(classifyModelError(noStatusCode), 'transient')).toBe(true);
+  });
 });
 
 describe('computeBackoffDelayMs', () => {

@@ -5,4 +5,5 @@ set -e
 # than this container's root — tell git it's safe so crab'd can inspect/commit it.
 git config --global --add safe.directory "${GITHUB_WORKSPACE:-/github/workspace}" || true
 
-exec node /app/packages/action/dist/cli.mjs
+# Set here rather than NODE_OPTIONS, which every process the agent's shell spawns would inherit.
+exec node --max-old-space-size="${CRABD_MAX_OLD_SPACE_MB:-3072}" /app/packages/action/dist/cli.mjs

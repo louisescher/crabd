@@ -428,7 +428,7 @@ name must match `token_env`:
 | Field             | Type     | Default | Description                                                                                                                                                    |
 | ----------------- | -------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `max_turns`       | `number` | `40`    | **Hard ceiling** on tool-calling turns — the run is aborted if it's exceeded. Not injected into the prompt, so it doesn't bias the model into finishing early. |
-| `timeout_minutes` | `number` | —       | **Hard** wall-clock limit, enforced via the agent's durability timeout.                                                                                        |
+| `timeout_minutes` | `number` | `20`    | **Hard** wall-clock ceiling on the whole run, shared by every retry and fallback-model switch `rate_limit` makes rather than given a fresh one each. Set to `0` to run with no ceiling. |
 
 ## `rate_limit`
 

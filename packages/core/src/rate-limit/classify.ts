@@ -16,8 +16,13 @@ export type ModelErrorClass = 'rate_limit' | 'transient_other' | 'quota' | 'fata
 const QUOTA =
   /insufficient[_\s-]?quota|quota\s+exceeded|exceeded your (?:current )?quota|\bbilling\b|payment required|\b402\b|go ?usage ?limit|usagelimit/i;
 
-/** Rate limiting / overload — the classic transient class. Includes 529 (overloaded). */
-const RATE_LIMIT = /\b429\b|\b529\b|rate[_\s-]?limit|too many requests|overloaded/i;
+/**
+ * Rate limiting / overload, the classic transient class. Includes 529 (overloaded), and Vertex's
+ * `RESOURCE_EXHAUSTED`, which is a rate limit with no other word for it: its numeric 429 is inside
+ * a JSON string the surrounding error does not always carry through, and without this a rate-limited
+ * Vertex run classifies as fatal and never reaches the fallback chain it configured.
+ */
+const RATE_LIMIT = /\b429\b|\b529\b|rate[_\s-]?limit|too many requests|overloaded|resource[_\s-]?exhausted/i;
 
 /** Other transient failures: server 5xx, network, timeouts. */
 const TRANSIENT =
