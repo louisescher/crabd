@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { classifyModelError } from '@crabd/core';
-import { describeFatal, describeTurnError, isHarnessRecoveryFailure, retryErrorDetail } from './turn-runner.ts';
+import {
+  describeFatal,
+  describeTurnError,
+  isHarnessRecoveryFailure,
+  readAssistantContent,
+  retryErrorDetail,
+} from './turn-runner.ts';
 
 /**
  * The pairing these tests protect: `handle.read()` rejects with an `AgentRunError` carrying only
@@ -144,5 +150,50 @@ describe('isHarnessRecoveryFailure', () => {
     expect(isHarnessRecoveryFailure('429 Too Many Requests')).toBe(false);
     expect(isHarnessRecoveryFailure('400 invalid_request_error')).toBe(false);
     expect(isHarnessRecoveryFailure('')).toBe(false);
+  });
+});
+
+/**
+ * The only place a run can see the model's reasoning: flue's `thinking_*` events go to an
+ * attached-agent stream, so the assistant message on the `turn` event is what the log has to read.
+ */
+describe('readAssistantContent', () => {
+  it('separates reasoning from the text the model said', () => {
+    const { thinking, text } = readAssistantContent({
+      role: 'assistant',
+      content: [
+        { type: 'thinking', thinking: 'The test lives next to the component.' },
+        { type: 'text', text: 'Adding the render test now.' },
+        { type: 'toolCall', id: 'c1', name: 'read', arguments: { path: 'a.ts' } },
+      ],
+    });
+    expect(thinking).toBe('The test lives next to the component.');
+    expect(text).toBe('Adding the render test now.');
+  });
+
+  it('joins several blocks of each kind', () => {
+    const { thinking, text } = readAssistantContent({
+      content: [
+        { type: 'thinking', thinking: 'first' },
+        { type: 'thinking', thinking: 'second' },
+        { type: 'text', text: 'one' },
+        { type: 'text', text: 'two' },
+      ],
+    });
+    expect(thinking).toBe('first\n\nsecond');
+    expect(text).toBe('one\ntwo');
+  });
+
+  it('drops redacted reasoning, which is an opaque blob the log has no use for', () => {
+    const { thinking } = readAssistantContent({
+      content: [{ type: 'thinking', thinking: 'AAAA', redacted: true }],
+    });
+    expect(thinking).toBe('');
+  });
+
+  it('returns empty strings for a turn that carried no output at all', () => {
+    expect(readAssistantContent(undefined)).toEqual({ thinking: '', text: '' });
+    expect(readAssistantContent({})).toEqual({ thinking: '', text: '' });
+    expect(readAssistantContent({ content: 'plain' })).toEqual({ thinking: '', text: '' });
   });
 });

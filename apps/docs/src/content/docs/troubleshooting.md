@@ -83,9 +83,37 @@ What to change:
 2. **Turn off `context.full_diff`** if it's on: a compressed diff uses far less of the budget this
    is protecting.
 
+### Reading the log after a heap crash
+
+The watchdog samples on the event loop, so a heap that climbs to the ceiling inside a single
+synchronous step outruns it and takes the process down with no warning line. Two things in the log
+cover that case.
+
+A reporter on its own thread keeps writing while the main thread is stuck, so you get a line naming
+the memory in use and the work that was running:
+
+```text
+[crabd] the main thread has not responded for 43s during tool bash pnpm build, rss 5212 MB
+```
+
+And node writes a diagnostic report on the way down, which the post step reads and prints:
+
+```text
+[crabd] the run aborted: OOMError: Allocation failed - JavaScript heap out of memory
+[crabd]   heap 6104 MB of 6144 MB
+```
+
+The tracking comment says "ran out of memory" instead of the generic crash wording whenever that
+report is there.
+
 ## Run crashed or was cancelled
 
 > **crab'd** stopped unexpectedly while ... The run ended before it could finish or report a result.
+
+The action's post step runs after a crash and after a cancel, and it does two things: it rewrites the
+tracking comment, and it leaves a short comment of its own. The second one exists because editing a
+comment notifies nobody. It replies in the thread when an inline review comment set the run off, and
+posts on the pull request otherwise, addressed to whoever triggered the run.
 
 What to change: read the run logs first, since they're the only place detail on a crash like this
 survives. Then apply the same fix as a turn-limit or memory failure: narrow the request, or split a

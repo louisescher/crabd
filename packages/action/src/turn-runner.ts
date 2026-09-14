@@ -11,7 +11,9 @@ import {
 } from '@crabd/core';
 import { providerOf, type ResolvedRateLimit } from '@crabd/config';
 import { CrabdTurn, type TurnCreation } from './agents/crabd-turn.ts';
-import { debug, log, warn } from './logger.ts';
+import { debug, group, log, warn } from './logger.ts';
+import { summarizeToolArgs } from './tool-log.ts';
+import { noteActivity } from './watchdog.ts';
 import { runContext } from './run-context.ts';
 import { verifyFindings } from './verify.ts';
 
@@ -93,6 +95,26 @@ interface AttemptResult {
   data: JsonValue;
   model?: string;
   partial?: boolean;
+}
+
+/**
+ * The model's own words for one turn: the reasoning it was willing to expose, and whatever it said
+ * outside a tool call. Gemini and Claude both put these in the assistant message the `turn` event
+ * carries, which is the only place a run sees them: flue's `thinking_*` stream events reach an
+ * attached-agent stream, not `observe`.
+ */
+export function readAssistantContent(output: unknown): { thinking: string; text: string } {
+  const content = (output as { content?: unknown } | undefined)?.content;
+  if (!Array.isArray(content)) return { thinking: '', text: '' };
+  const thinking: string[] = [];
+  const text: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue;
+    const b = block as { type?: string; thinking?: unknown; text?: unknown; redacted?: boolean };
+    if (b.type === 'thinking' && typeof b.thinking === 'string' && !b.redacted) thinking.push(b.thinking);
+    if (b.type === 'text' && typeof b.text === 'string') text.push(b.text);
+  }
+  return { thinking: thinking.join('\n\n').trim(), text: text.join('\n').trim() };
 }
 
 export function describeFatal(
@@ -331,10 +353,14 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
     if ('error' in e && e.error) lastTurnError = describeTurnError(e.error);
 
     switch (e.type) {
-      case 'tool_start':
+      case 'tool_start': {
         toolStarts += 1;
-        // Args stay behind `debug`: they can carry file contents into a public repository's log.
-        log(`[${ctx.runId}] tool_start ${e.toolName}`);
+        // A hand-picked field per tool, so the log says which command ran and which file was touched.
+        // The full argument object stays behind `debug`: it carries file contents.
+        const summary = summarizeToolArgs(e.toolName, e.args);
+        const line = summary ? `${e.toolName} ${summary}` : e.toolName;
+        noteActivity(`tool ${line}`);
+        log(`[${ctx.runId}] tool_start ${line}`);
         debug(() => `[${ctx.runId}] tool_start ${e.toolName} args=${truncate(e.args)}`);
         if (!hasMaxTurns || !currentAbort) return;
         // Once the wrap-up is in flight the budget stops applying: the reserve exists so the final
@@ -349,11 +375,13 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
           void currentAbort();
         }
         return;
+      }
       case 'tool':
         log(`[${ctx.runId}] tool ${e.toolName} ${e.isError ? 'failed' : 'ok'} in ${e.durationMs}ms`);
         debug(() => `[${ctx.runId}] tool ${e.toolName} result=${truncate(e.result)}`);
         return;
       case 'turn_start':
+        noteActivity(`turn ${e.turnId} on ${currentModel}`);
         log(`[${ctx.runId}] turn_start ${e.turnId} purpose=${e.purpose} model=${currentModel}`);
         return;
       case 'turn': {
@@ -365,6 +393,9 @@ export async function runTurn(input: TurnInput, rl: ResolvedRateLimit, primaryMo
           `[${ctx.runId}] turn ${e.turnId} purpose=${e.purpose} model=${e.request.requestedModel} ${e.durationMs}ms ` +
             `${e.isError ? 'ERROR' : 'ok'} ${usageStr}`,
         );
+        const { thinking, text } = readAssistantContent(e.response.output);
+        if (thinking) group(`thinking ${e.turnId}`, thinking);
+        if (text) log(`[${ctx.runId}] said ${truncate(text, 600)}`);
         return;
       }
       case 'task_start':

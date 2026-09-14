@@ -74,7 +74,7 @@ Read by the provider integrations (not by crab'd directly). Provide the one(s) f
 
 | Variable        | Description                                                                                                                                                                                                                                                                      |
 | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CRABD_VERBOSE` | Set to `true` to add tool arguments, tool results, and subagent prompts to the log. Off by default. A normal run already logs every tool call and model turn with its name, model, and duration, so this is for when you need to see what was passed, not whether something ran. |
+| `CRABD_VERBOSE` | Set to `true` to add full tool arguments, tool results, and subagent prompts to the log. Off by default. A normal run already logs the command each `bash` call ran, the path each file tool touched, every model turn with its model and duration, and the model's reasoning in a collapsed group, so this is for when you need the whole argument object. |
 | `CRABD_DEBUG`   | Alias for `CRABD_VERBOSE`.                                                                                                                                                                                                                                                       |
 
 Verbose lines are also emitted as GitHub Actions `::debug::` workflow-command annotations, so they
@@ -91,7 +91,8 @@ Set on crab'd's own action image. You should only override these when the defaul
 
 | Variable                 | Description                                                                                                                                                                                                                           |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CRABD_MAX_OLD_SPACE_MB` | V8 old-space ceiling for crab'd's own process, in MB. Default `3072`. The run's heap watchdog measures against the same number, so raising it raises both. It applies to crab'd only, not to node processes the agent's shell starts. |
+| `CRABD_MAX_OLD_SPACE_MB` | V8 old-space ceiling for crab'd's own process, in MB. Default `6144`. The run's heap watchdog measures against the same number, so raising it raises both. It applies to crab'd only, not to node processes the agent's shell starts. |
+| `CRABD_REPORT_DIR`       | Where node writes its diagnostic report when the process aborts, and where the post step looks for one. Defaults to the runner's temp directory, which both the run container and the post container mount.                          |
 | `CRABD_SANDBOX_BIN`      | Directory prepended to the sandbox's `PATH`, holding the read-only `git` and `gh` shims. Unset it to give the agent's shell the real binaries, and see [The sandbox](/data-egress/#the-sandbox) for what that means.                  |
 
 ## Runner-provided (read automatically)

@@ -14,6 +14,18 @@ export interface RunState {
   mode: string;
   branding: CommentContext;
   triggerPhrase?: string;
+  /**
+   * What set the run off, so a crash can answer it directly. Editing the tracking comment notifies
+   * nobody, which is why a dead run needs a comment of its own.
+   */
+  trigger?: {
+    /** The comment crab'd was replying to, absent when the run came from an event with no comment. */
+    commentId?: number;
+    /** `review` means the trigger was an inline review comment, which takes a threaded reply. */
+    kind: 'issue' | 'review';
+    /** Login to address the notice to. */
+    actor?: string;
+  };
   finalized: boolean;
 }
 

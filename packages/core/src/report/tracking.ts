@@ -28,7 +28,14 @@ export const REPLY_MARKER = '<!-- crabd:reply -->';
  */
 export const RUNNING_MARKER = '<!-- crabd:running -->';
 
-export const CRABD_MARKERS = [TRACKING_MARKER, FINDING_MARKER, MEMORY_MARKER, PR_MARKER, REPLY_MARKER];
+/**
+ * Hidden marker on the standalone comment the post step leaves when a run dies without answering.
+ * Distinct from {@link TRACKING_MARKER} so the notice is never mistaken for the sticky tracking
+ * comment a later run would reuse.
+ */
+export const CRASH_MARKER = '<!-- crabd:crashed -->';
+
+export const CRABD_MARKERS = [TRACKING_MARKER, FINDING_MARKER, MEMORY_MARKER, PR_MARKER, REPLY_MARKER, CRASH_MARKER];
 
 export function isCrabdAuthored(body: string | undefined): boolean {
   return Boolean(body && CRABD_MARKERS.some((marker) => body.includes(marker)));
@@ -334,4 +341,37 @@ export function renderFailure(branding: CommentContext, render: FailureRender): 
 /** The tracking comment body when the run fails. Thin wrapper over {@link renderFailure}. */
 export function renderError(branding: CommentContext, mode: string, message: string): string {
   return renderFailure(branding, { mode, kind: 'error', detail: message });
+}
+
+/** Short cause line per failure class, for the standalone crash notice. */
+const CRASH_CAUSE: Record<FailureKind, string> = {
+  max_turns: 'it reached its tool-call limit',
+  timeout: 'it ran out of time',
+  resource_exhausted: 'it ran out of memory',
+  config: 'its configuration is invalid',
+  network: 'a network or provider error ended the run',
+  crashed: 'the run ended without reporting a result',
+  error: 'it hit an error',
+};
+
+export interface CrashNoticeRender {
+  mode: string;
+  kind: FailureKind;
+  /** Login to address the notice to, so the person who triggered the run is notified. */
+  actor?: string;
+}
+
+/**
+ * The standalone comment the post step leaves when a run dies without answering. The tracking
+ * comment is edited in the same pass, and an edit notifies nobody: this is what reaches the person
+ * who asked. Deliberately short, because the tracking comment carries the full explanation.
+ */
+export function renderCrashNotice(branding: CommentContext, render: CrashNoticeRender): string {
+  const verb = MODE_VERB[render.mode] ?? 'working';
+  const cause = CRASH_CAUSE[render.kind] ?? CRASH_CAUSE.crashed;
+  const mention = render.actor ? `@${render.actor} ` : '';
+  const lead = `${mention}${prefix(branding)}**${branding.name}** stopped while ${verb}: ${cause}.`;
+  const where = 'Its status comment on this thread has the details and what to change.';
+  const link = branding.runUrl ? ` [run logs](${branding.runUrl})` : '';
+  return `${lead}\n\n${where}${link}\n${CRASH_MARKER}`;
 }

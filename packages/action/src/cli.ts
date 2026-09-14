@@ -2,6 +2,7 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { getHeapStatistics } from 'node:v8';
 import { init } from '@flue/runtime';
 import { sqlite, start } from '@flue/runtime/node';
 import {
@@ -40,6 +41,7 @@ import { loadResolvedConfig } from './config-loader.ts';
 import { buildForge, detectForge } from './forge-factory.ts';
 import { log, warn } from './logger.ts';
 import { saveRunState, type RunState } from './run-state.ts';
+import { startWatchdog, type Watchdog } from './watchdog.ts';
 import { buildProviders, unsizedCustomModels } from './providers.ts';
 import {
   buildRunContext,
@@ -236,6 +238,7 @@ async function registerExtensionModes(extensionPath: string | undefined, cwd: st
 }
 
 let runtime: { stop(): Promise<void> } | undefined;
+let watchdog: Watchdog | undefined;
 /** The model the classify pass uses: the config default, before a per-mode override applies. */
 let classifyModel = 'anthropic/claude-haiku-4-5';
 
@@ -292,6 +295,7 @@ let fatalReporter: ((detail: string) => Promise<void>) | undefined;
 
 async function main(): Promise<number> {
   registerBuiltinModes();
+  watchdog = startWatchdog({ heapLimitMb: Math.round(getHeapStatistics().heap_size_limit / 1_048_576) });
 
   const eventName = process.env.CRABD_EVENT_NAME ?? process.env.GITHUB_EVENT_NAME;
   const eventPath = process.env.CRABD_EVENT_PATH ?? process.env.GITHUB_EVENT_PATH;
@@ -402,6 +406,11 @@ async function main(): Promise<number> {
     mode: plan.verbKey ?? plan.mode,
     branding: plan.branding,
     ...(config.triggerPhrase ? { triggerPhrase: config.triggerPhrase } : {}),
+    trigger: {
+      kind: event.kind === 'pull_request_review_comment' ? 'review' : 'issue',
+      ...(event.comment ? { commentId: event.comment.id } : {}),
+      ...(event.actor.login ? { actor: event.actor.login } : {}),
+    },
     finalized: false,
   };
   saveRunState(runState);
@@ -717,6 +726,7 @@ process.on('SIGINT', () => void onFatal(new Error('the run was interrupted (SIGI
 
 main()
   .finally(async () => {
+    await watchdog?.stop().catch(() => {});
     // The agent runtime owns a durable submission coordinator and a SQLite handle; leaving them open
     // keeps the process alive after the work is done.
     await runtime?.stop().catch(() => {});

@@ -151,6 +151,7 @@ export {
 // Report
 export {
   DEFAULT_BRANDING,
+  renderCrashNotice,
   renderError,
   renderFailure,
   renderMemoryNote,
@@ -161,6 +162,7 @@ export {
   renderWorking,
   RUNNING_MARKER,
   TRACKING_MARKER,
+  CRASH_MARKER,
   FINDING_MARKER,
   MEMORY_MARKER,
   PR_MARKER,
@@ -172,6 +174,7 @@ export {
   type HandledKind,
   type Branding,
   type CommentContext,
+  type CrashNoticeRender,
   type FailureKind,
   type FailureRender,
   type RateLimitedRender,
